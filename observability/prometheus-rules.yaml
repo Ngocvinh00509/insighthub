@@ -1,0 +1,82 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: insighthub-anomaly-rules
+  namespace: monitoring
+  labels:
+    release: kube-prometheus-stack
+    app.kubernetes.io/part-of: insighthub
+spec:
+  groups:
+    - name: insighthub.anomaly-recording
+      interval: 30s
+      rules:
+        - record: insighthub:llm_latency_p95
+          expr: |
+            histogram_quantile(
+              0.95,
+              sum by (namespace, le) (
+                rate(insighthub_llm_call_latency_seconds_bucket[5m])
+              )
+            )
+        - record: insighthub:llm_latency_upper
+          expr: |
+            avg_over_time(insighthub:llm_latency_p95[1h])
+            + 3 * stddev_over_time(insighthub:llm_latency_p95[1h])
+    - name: insighthub.anomaly-alerts
+      interval: 30s
+      rules:
+        - alert: LLMLatencySpikeAnomaly
+          expr: insighthub:llm_latency_p95 > insighthub:llm_latency_upper
+          for: 2m
+          labels:
+            severity: critical
+            service: api
+            team: insighthub
+          annotations:
+            summary: "InsightHub LLM p95 latency is above its anomaly band"
+            description: >-
+              LLM p95 latency in namespace {{ $labels.namespace }} has exceeded
+              its rolling one-hour upper anomaly bound (mean + 3 standard
+              deviations) continuously for more than two minutes. Check the
+              generation provider, API saturation, and recent deployments.
+        - alert: IngestionQueueBacklogAnomaly
+          expr: insighthub_queue_depth > 50
+          for: 3m
+          labels:
+            severity: warning
+            service: ingestion-worker
+            team: insighthub
+          annotations:
+            summary: "InsightHub ingestion queue backlog is above 50 jobs"
+            description: >-
+              The Redis-backed ingestion queue in namespace {{ $labels.namespace }}
+              has remained above 50 pending jobs for more than three minutes.
+              Check worker replica health, Redis connectivity, and provider
+              latency before increasing worker capacity.
+        - alert: ErrorRateBurstAnomaly
+          expr: |
+            (
+              sum by (namespace) (
+                rate(insighthub_http_requests_total{status=~"5.."}[5m])
+              )
+              /
+              clamp_min(
+                sum by (namespace) (
+                  rate(insighthub_http_requests_total[5m])
+                ),
+                1
+              )
+            ) > 0.05
+          for: 1m
+          labels:
+            severity: critical
+            service: api
+            team: insighthub
+          annotations:
+            summary: "InsightHub HTTP 5xx error rate exceeds 5 percent"
+            description: >-
+              The InsightHub HTTP 5xx request ratio in namespace
+              {{ $labels.namespace }} has been above 5% for more than one
+              minute. Investigate API logs, upstream LLM/embedding providers,
+              Redis, PostgreSQL, and the most recent deployment.
