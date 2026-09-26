@@ -1,0 +1,55 @@
+{
+  "incident_id": "INC-001",
+  "incident_type": "LLM Latency Spike",
+  "timestamp": "2026-09-24T09:15:00Z",
+  "summary": "LLM generation p95 latency exceeded its rolling anomaly band for over two minutes, delaying chat responses.",
+  "evidence_source": "simulated Prometheus incident data; not live-cluster evidence",
+  "evidence": [
+    {
+      "metric_name": "insighthub:llm_latency_p95",
+      "value": "18.7 seconds",
+      "baseline": "3.2 seconds (one-hour median)",
+      "timestamp": "2026-09-24T09:15:00Z"
+    },
+    {
+      "metric_name": "insighthub:llm_latency_upper",
+      "value": "8.5 seconds",
+      "baseline": "8.5 seconds (mean + 3 standard deviations, one hour)",
+      "timestamp": "2026-09-24T09:15:00Z"
+    },
+    {
+      "metric_name": "insighthub_llm_call_latency_seconds_count",
+      "value": "286 calls in the preceding 5 minutes",
+      "baseline": "274 calls per 5 minutes",
+      "timestamp": "2026-09-24T09:15:00Z"
+    }
+  ],
+  "top_hypotheses": [
+    {
+      "hypothesis": "The configured generation provider experienced elevated response time while request volume remained near baseline.",
+      "confidence": 0.82,
+      "evidence_ref": ["evidence[0]", "evidence[1]", "evidence[2]"]
+    },
+    {
+      "hypothesis": "A recent API deployment introduced slower prompt construction or retry behavior.",
+      "confidence": 0.46,
+      "evidence_ref": ["evidence[0]"]
+    }
+  ],
+  "ruled_out": [
+    {
+      "cause": "Traffic surge",
+      "reason": "LLM call volume was within 4.4% of its five-minute baseline."
+    },
+    {
+      "cause": "Redis ingestion backlog",
+      "reason": "The latency signal is from chat generation and did not coincide with a simulated queue-depth increase."
+    }
+  ],
+  "recommended_actions": [
+    "Check generation-provider status, timeout telemetry, and provider-specific latency by model.",
+    "Compare prompt size, retry count, and deployment revision with the pre-incident baseline.",
+    "Temporarily route eligible traffic to an approved alternate provider only through the configured provider policy.",
+    "Keep LLMLatencySpikeAnomaly open until p95 remains below the anomaly upper bound for two evaluation intervals."
+  ]
+}

@@ -1,0 +1,41 @@
+# LiteLLM Proxy configuration. Secrets are injected only through environment variables.
+# Run the key bootstrap after the proxy and PostgreSQL report ready.
+model_list:
+  - model_name: insighthub-chat
+    litellm_params:
+      model: os.environ/LITELLM_UPSTREAM_CHAT_MODEL
+      api_key: os.environ/OPENAI_API_KEY
+  - model_name: insighthub-chat-fallback
+    litellm_params:
+      model: os.environ/LITELLM_FALLBACK_CHAT_MODEL
+      api_key: os.environ/OPENAI_API_KEY
+  - model_name: insighthub-embedding
+    litellm_params:
+      model: os.environ/LITELLM_UPSTREAM_EMBEDDING_MODEL
+      api_key: os.environ/OPENAI_API_KEY
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+  database_url: os.environ/DATABASE_URL
+  store_model_in_db: false
+
+litellm_settings:
+  callbacks:
+    - prometheus
+  prometheus_initialize_budget_metrics: true
+  # Budget checks require the PostgreSQL database above; do not run budgeted keys DB-less.
+  upperbound_key_generate_params:
+    max_budget: 25.00
+    budget_duration: 30d
+  default_key_generate_params:
+    models:
+      - insighthub-chat
+      - insighthub-embedding
+
+router_settings:
+  num_retries: 2
+  allowed_fails: 1
+  cooldown_time: 30
+  fallbacks:
+    - insighthub-chat:
+        - insighthub-chat-fallback

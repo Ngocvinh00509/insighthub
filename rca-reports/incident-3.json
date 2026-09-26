@@ -1,0 +1,55 @@
+{
+  "incident_id": "INC-003",
+  "incident_type": "HTTP 5xx Error Burst",
+  "timestamp": "2026-09-24T13:05:00Z",
+  "summary": "The InsightHub API 5xx ratio exceeded 5% for more than one minute, affecting chat requests.",
+  "evidence_source": "simulated Prometheus incident data; not live-cluster evidence",
+  "evidence": [
+    {
+      "metric_name": "insighthub_http_requests_total{status=~\"5..\"}",
+      "value": "96 5xx responses per 1,000 requests (9.6%)",
+      "baseline": "3 5xx responses per 1,000 requests (0.3%)",
+      "timestamp": "2026-09-24T13:05:00Z"
+    },
+    {
+      "metric_name": "insighthub_rag_query_latency_seconds",
+      "value": "p95 7.8 seconds",
+      "baseline": "p95 1.4 seconds",
+      "timestamp": "2026-09-24T13:05:00Z"
+    },
+    {
+      "metric_name": "up{job=\"insighthub-api\"}",
+      "value": "1 (target reachable)",
+      "baseline": "1 (target reachable)",
+      "timestamp": "2026-09-24T13:05:00Z"
+    }
+  ],
+  "top_hypotheses": [
+    {
+      "hypothesis": "An upstream dependency timeout caused API requests to fail while the API target itself remained reachable.",
+      "confidence": 0.81,
+      "evidence_ref": ["evidence[0]", "evidence[1]", "evidence[2]"]
+    },
+    {
+      "hypothesis": "A deployment changed provider configuration or timeout behavior for the chat request path.",
+      "confidence": 0.53,
+      "evidence_ref": ["evidence[0]", "evidence[1]"]
+    }
+  ],
+  "ruled_out": [
+    {
+      "cause": "API pod outage",
+      "reason": "The API scrape target reported up=1 during the error burst."
+    },
+    {
+      "cause": "Normal error variation",
+      "reason": "The observed 9.6% 5xx rate is 32 times the 0.3% baseline and exceeds the 5% alert threshold."
+    }
+  ],
+  "recommended_actions": [
+    "Correlate API error-code metadata with generation and embedding provider timeout telemetry; do not expose request content in logs.",
+    "Compare the active API deployment revision and provider configuration with the last healthy revision.",
+    "Apply the approved timeout or circuit-breaker mitigation and verify the 5xx ratio returns below 5%.",
+    "Capture baseline, mitigation, and recovery timestamps as incident evidence before resolving the alert."
+  ]
+}

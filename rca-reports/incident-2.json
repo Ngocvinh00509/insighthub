@@ -1,0 +1,55 @@
+{
+  "incident_id": "INC-002",
+  "incident_type": "Queue Backlog Accumulation",
+  "timestamp": "2026-09-24T10:40:00Z",
+  "summary": "The Redis-backed ingestion queue remained above the 50-job alert threshold for more than three minutes.",
+  "evidence_source": "simulated Prometheus incident data; not live-cluster evidence",
+  "evidence": [
+    {
+      "metric_name": "insighthub_queue_depth",
+      "value": "147 pending jobs",
+      "baseline": "4 pending jobs",
+      "timestamp": "2026-09-24T10:40:00Z"
+    },
+    {
+      "metric_name": "insighthub_ingestion_errors_total",
+      "value": "18 errors in the incident window",
+      "baseline": "0 errors per 15 minutes",
+      "timestamp": "2026-09-24T10:40:00Z"
+    },
+    {
+      "metric_name": "container_cpu_usage_seconds_total",
+      "value": "0.94 CPU cores for ingestion-worker pod",
+      "baseline": "0.31 CPU cores for ingestion-worker pod",
+      "timestamp": "2026-09-24T10:40:00Z"
+    }
+  ],
+  "top_hypotheses": [
+    {
+      "hypothesis": "The ingestion worker was saturated and could not drain jobs as quickly as they were enqueued.",
+      "confidence": 0.84,
+      "evidence_ref": ["evidence[0]", "evidence[2]"]
+    },
+    {
+      "hypothesis": "Embedding-provider failures caused worker retries, reducing effective throughput.",
+      "confidence": 0.68,
+      "evidence_ref": ["evidence[0]", "evidence[1]"]
+    }
+  ],
+  "ruled_out": [
+    {
+      "cause": "No incoming work",
+      "reason": "Queue depth increased from the normal four pending jobs to 147."
+    },
+    {
+      "cause": "Healthy worker capacity",
+      "reason": "Worker CPU was near one core while the pending queue stayed above the alert threshold."
+    }
+  ],
+  "recommended_actions": [
+    "Inspect ingestion-worker logs for provider errors, retries, and invalid-document failures using document IDs only.",
+    "Verify Redis connectivity and pending-job age before scaling workers.",
+    "Increase ingestion-worker replicas within the approved capacity plan after confirming the provider is healthy.",
+    "Reprocess only failed documents through the existing idempotent pipeline after the backlog is drained."
+  ]
+}
