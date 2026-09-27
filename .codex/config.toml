@@ -1,4 +1,4 @@
-﻿# Project-scoped Codex MCP configuration for InsightHub.
+# Project-scoped Codex MCP configuration for InsightHub.
 # Trust this project before Codex loads this file.
 
 [mcp_servers.filesystem]
@@ -17,7 +17,15 @@ tool_timeout_sec = 15
 
 [mcp_servers.kubernetes]
 command = "npx"
-args = ["-y", "kubernetes-mcp-server@0.0.66", "--read-only", "--disable-multi-cluster", "--toolsets=core", "--namespace=insighthub"]
+args = [
+	"-y",
+	"kubernetes-mcp-server@0.0.66",
+	"--kubeconfig=C:\\Users\\DO NGOC VINH\\.kube\\insighthub-mcp-readonly",
+	"--read-only",
+	"--disable-destructive",
+	"--disable-multi-cluster",
+	"--toolsets=core"
+]
 cwd = "D:\\AI_VTI\\insighthub"
 startup_timeout_sec = 15
 tool_timeout_sec = 15
