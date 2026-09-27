@@ -1,0 +1,9 @@
+{
+  "resource_changes": [
+    {
+      "address": "aws_db_instance.unsafe",
+      "type": "aws_db_instance",
+      "change": {"after": {"publicly_accessible": true, "storage_encrypted": false, "tags": {"project": "insighthub"}}}
+    }
+  ]
+}

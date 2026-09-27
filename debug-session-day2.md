@@ -35,73 +35,212 @@ codex mcp get prometheus
 
 Sau khi sửa cấu hình, khởi động lại Codex CLI và chạy lại danh sách MCP để kiểm tra trạng thái kết nối. Không dùng `npx` với phiên bản thả nổi trong cấu hình nộp bài; phiên bản server phải được pin theo cấu hình Day 2 đã được phê duyệt.
 
-### Case Study 2 — RBAC read-only của Kubernetes MCP
+### Case Study 2 — Điều tra nghi vấn ingestion-worker restart/crash
 
-| Tool MCP | Identity chạy | Kết quả mong đợi/quan sát |
-| --- | --- | --- |
-| `kubernetes/list_pods` | ServiceAccount `mcp-readonly` | Thành công; chỉ đọc danh sách Pod trong namespace được cấp quyền. |
-| `kubernetes/delete_pod` | ServiceAccount `mcp-readonly` | Bị từ chối `Forbidden`; không có Pod nào bị xóa. |
-
-Lời gọi được kiểm thử với namespace lab `insighthub`:
+Trong quá trình quan sát container `insighthub-do2603-ingestion-worker-1`, Docker MCP trả về nhiều thông báo:
 
 ```text
-kubernetes/list_pods(namespace="insighthub")
-kubernetes/delete_pod(namespace="insighthub", name="<pod-thu-nghiem>")
+Starting worker for 1 functions: process_document
 ```
 
-`delete_pod` là negative test có chủ đích. Không lặp lại bằng một Pod production hoặc bỏ qua lỗi quyền bằng cách đổi sang identity có đặc quyền cao hơn.
+Điều này tạo ra giả thuyết rằng ingestion-worker có thể đã restart hoặc crash.
+
+Tuy nhiên, các dòng startup không đủ để kết luận container bị crash. Vì vậy quá trình điều tra tiếp tục bằng các Docker MCP tool read-only.
+
+#### Bước 1 — Kiểm tra logs
+
+Tool:
+
+```text
+container_logs
+```
+
+được gọi thông qua MCP Inspector với giới hạn số dòng log.
+
+Log quan sát được gồm:
+
+```text
+Starting worker for 1 functions: process_document
+redis_version=7.4.11
+```
+
+Trong phần log được kiểm tra không quan sát thấy traceback, exception, OOM message hoặc application error.
+
+#### Bước 2 — Kiểm tra container state
+
+Tool read-only:
+
+```text
+container_inspect
+```
+
+được sử dụng để kiểm tra trạng thái container.
+
+Các field không nhạy cảm được trích xuất:
+
+```text
+Status: running
+Running: True
+Restarting: False
+ExitCode: 0
+OOMKilled: False
+Error:
+Health: healthy
+```
+
+Kết quả cho thấy container hiện đang chạy và healthy, không có bằng chứng về active crash loop hoặc OOM termination.
+
+#### Bước 3 — Kiểm tra restart policy
+
+Từ cùng kết quả `container_inspect`:
+
+```text
+RestartPolicy.Name: no
+RestartPolicy.MaximumRetryCount: 0
+```
+
+Container không được cấu hình Docker automatic restart policy.
+
+#### Kết luận
+
+Giả thuyết ingestion-worker hiện đang crash-looping **không được evidence hỗ trợ**.
+
+Evidence cho thấy:
+
+- container đang `running`;
+- health status là `healthy`;
+- `Restarting=False`;
+- `ExitCode=0`;
+- `OOMKilled=False`;
+- error field trống;
+- log được kiểm tra không có exception hoặc traceback;
+- Docker automatic restart policy không được bật.
+
+Các startup message cho thấy worker đã được start nhiều lần, nhưng evidence hiện tại không xác định nguyên nhân của các lần start đó.
+
+Vì vậy không kết luận rằng worker đã crash, bị Docker tự restart, bị Compose recreate hay được restart thủ công nếu chưa có thêm evidence.
 
 ## Phân tích từ AI Agent
 
-### Case Study 1 — Nguyên nhân `startup_timeout_sec`
+### Case Study 1 — Phân tích MCP startup
 
-Log lỗi thực tế trong phiên Codex CLI cho thấy bốn client không kịp hoàn tất handshake trước ngưỡng khởi động:
+Trong giai đoạn cấu hình ban đầu, các MCP backend gặp vấn đề hoàn tất startup/stdio initialization.
 
-```text
-MCP client filesystem: startup timeout (startup_timeout_sec)
-MCP client kubernetes: startup timeout (startup_timeout_sec)
-MCP client docker: startup timeout (startup_timeout_sec)
-MCP client prometheus: startup timeout (startup_timeout_sec)
-```
-
-Triệu chứng đồng thời ở bốn server cho thấy đây không phải lỗi riêng của Kubernetes, Docker, Prometheus hoặc filesystem allowlist. Nguyên nhân gần nhất là độ trễ khởi tạo process `npx`/Node trên Windows — gồm resolve executable, nạp package đã pin và tạo stdio transport — vượt quá timeout mặc định của host. Đây là lỗi lifecycle của MCP client; chưa có bằng chứng cho lỗi RBAC, endpoint Prometheus, Docker daemon hay Kubernetes API ở giai đoạn đó.
-
-Giải pháp là tăng timeout khởi động riêng cho từng server trong `%USERPROFILE%\\.codex\\config.toml` (không ghi credential vào file log). Ví dụ cấu trúc cấu hình:
-
-```toml
-[mcp_servers.filesystem]
-# command, args và filesystem allowlist giữ theo cấu hình đã pin
-startup_timeout_sec = 60
-
-[mcp_servers.kubernetes]
-# command, args, --read-only và kubeconfig của mcp-readonly giữ theo cấu hình đã pin
-startup_timeout_sec = 60
-
-[mcp_servers.docker]
-# command và args của server đã pin
-startup_timeout_sec = 60
-
-[mcp_servers.prometheus]
-# command, args và endpoint đã được allowlist
-startup_timeout_sec = 60
-```
-
-Giá trị `60` giây là timeout khởi động, không phải timeout cho từng tool call. Sau khi thay đổi cần khởi động lại host, kiểm tra lại `tools/list` và gọi một tool read-only trên từng backend. Nếu còn timeout, cần thu log thời gian process khởi động và kiểm tra Node/npm cache, thay vì nâng timeout vô hạn.
-
-### Case Study 2 — Bằng chứng RBAC là ranh giới thực thi
-
-`list_pods` trả kết quả thành công, xác nhận ServiceAccount có verb `list` trên resource `pods` trong namespace `insighthub`. Lời gọi `delete_pod` bị Kubernetes API server trả về `Forbidden`, phù hợp với việc Role/RoleBinding của `mcp-readonly` không cấp verb `delete`:
+Các cấu hình được kiểm tra bằng:
 
 ```text
-Error from Kubernetes API: Forbidden
-serviceaccount:mcp-readonly cannot delete resource "pods" in namespace "insighthub"
+codex mcp list
+codex mcp get filesystem
+codex mcp get docker
+codex mcp get kubernetes
+codex mcp get prometheus
 ```
 
-Kết quả này chứng minh read-only được thực thi bởi RBAC phía cluster, không chỉ là mô tả tool hoặc prompt instruction. Cấu hình Kubernetes MCP vẫn cần giữ read-only/allowlist ở tầng server, nhưng các cờ đó là lớp phòng vệ bổ sung; ServiceAccount giới hạn quyền mới là ranh giới bắt buộc.
+Sau quá trình kiểm tra command, arguments, đường dẫn, dependency và timeout configuration, cả bốn MCP backend đều thực hiện thành công real read-only tool call.
+
+Kết quả cuối cùng:
+
+```text
+Filesystem   PASS
+Docker       PASS
+Kubernetes   PASS
+Prometheus   PASS
+```
+
+MCP Inspector cũng thực hiện thành công `tools/list` và `tools/call` trên cả bốn backend.
+
+Evidence hiện có không đủ để khẳng định một nguyên nhân duy nhất cho startup issue ban đầu.
+
+Vì vậy không kết luận rằng `npx`, Node.js hoặc một giá trị timeout cụ thể là root cause nếu chưa có timing/log evidence chứng minh điều đó.
+
+Cấu hình cuối cùng sử dụng explicit `startup_timeout_sec` và `tool_timeout_sec` phù hợp cho từng MCP server thay vì tăng toàn bộ server lên `60` giây.
+
+### Case Study 2 — Phân tích ingestion-worker
+
+Các startup message ban đầu tạo ra giả thuyết rằng ingestion-worker có thể restart hoặc crash.
+
+Docker MCP được sử dụng để thu thập thêm evidence bằng:
+
+```text
+container_logs
+container_inspect
+```
+
+State quan sát được:
+
+```text
+Status: running
+Running: True
+Restarting: False
+ExitCode: 0
+OOMKilled: False
+Health: healthy
+```
+
+Restart policy:
+
+```text
+RestartPolicy.Name: no
+RestartPolicy.MaximumRetryCount: 0
+```
+
+Do đó không có evidence cho thấy container hiện đang crash-looping.
+
+Các lần startup trước đó không được gán nguyên nhân khi chưa có thêm evidence.
+
+### Kubernetes RBAC
+
+Kubernetes MCP sử dụng ServiceAccount `mcp-readonly` trong namespace `insighthub`.
+
+RBAC cho phép các thao tác đọc như:
+
+```text
+get
+list
+watch
+```
+
+và không cấp các mutation verb như:
+
+```text
+create
+update
+patch
+delete
+```
+
+Read operation được xác nhận thành công trong khi destructive Pod operation bị Kubernetes authorization từ chối.
+
+Điều này tạo defense in depth giữa MCP read-only configuration và Kubernetes RBAC.
 
 ## Kết luận & Sửa đổi
 
-1. **Khắc phục timeout:** thêm `startup_timeout_sec = 60` vào từng block MCP server trong `.codex/config.toml`, giữ lệnh và dependency ở phiên bản đã pin; sau đó restart Codex CLI và xác minh lại kết nối/từng lời gọi read-only.
-2. **Bảo vệ quyền Kubernetes:** giữ Kubernetes MCP chạy bằng kubeconfig/identity của `mcp-readonly`, giới hạn namespace `insighthub`, không cấp `delete`, `patch`, `create` hoặc `update` cho Pod. Negative test `delete_pod` phải tiếp tục trả `Forbidden`.
-3. **Tiêu chí đóng case:** cả bốn MCP phải hoàn thành startup và hiện tool list; filesystem chỉ truy cập allowlist; Docker/Prometheus chỉ dùng thao tác đọc theo cấu hình; K8s `list_pods` thành công và `delete_pod` bị chặn bởi RBAC.
-4. **Theo dõi tiếp:** nếu lỗi khởi động tái diễn, lưu timestamp, phiên bản Codex/Node, thời gian khởi động từng server và thông báo lỗi đã sanitize. Không lưu token, kubeconfig, URL có credential hoặc output chứa dữ liệu nhạy cảm.
+1. **MCP startup:** cả bốn MCP backend `filesystem`, `docker`, `kubernetes` và `prometheus` đã hoàn thành real read-only tool call. Không gán một root cause cụ thể cho startup issue ban đầu khi chưa có đủ timing/log evidence.
+
+2. **Filesystem security:** Filesystem MCP chỉ được phép truy cập project allowlist. Thử truy cập đường dẫn bên ngoài allowlist bị từ chối.
+
+3. **Docker validation:** Docker MCP đã quan sát container thành công bằng các read-only tool. Việc điều tra ingestion-worker bằng `container_logs` và `container_inspect` không tìm thấy evidence của active crash loop.
+
+4. **Kubernetes security:** Kubernetes MCP sử dụng ServiceAccount `mcp-readonly` và namespace-scoped RBAC. Các thao tác đọc được cho phép, trong khi destructive operation không được RBAC cấp quyền.
+
+5. **Prometheus validation:** Prometheus MCP gọi thành công `prometheus_summary` với predefined aggregate query `requests_5m`.
+
+6. **MCP Inspector:** `tools/list` và real `tools/call` đã được kiểm tra thành công trên cả bốn MCP backend.
+
+7. **Security:** không đưa token, kubeconfig content, private key, database credential hoặc secret khác vào debug report.
+
+### Final validation
+
+```text
+Filesystem MCP    PASS
+Docker MCP        PASS
+Kubernetes MCP    PASS
+Prometheus MCP    PASS
+
+Inspector Filesystem    PASS
+Inspector Docker        PASS
+Inspector Kubernetes    PASS
+Inspector Prometheus    PASS
+```
+
+Day 2 MCP integration và debugging workflow đã được xác minh bằng real read-only tool calls và evidence thu thập từ môi trường local.

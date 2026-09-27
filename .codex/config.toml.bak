@@ -10,16 +10,7 @@ tool_timeout_sec = 10
 
 [mcp_servers.docker]
 command = "docker"
-args = [
-    "run",
-    "--rm",
-    "-i",
-    "-v",
-    "/var/run/docker.sock:/var/run/docker.sock:ro",
-    "-e",
-    "DOCKER_MCP_SERVER_READONLY=1",
-    "ghcr.io/l337-org/docker-mcp-server@sha256:a57fae59c25e35e381a3123a743dad30998be0b88f402d20d1f9aa56bf8bbedc"
-]
+args = ["mcp", "gateway", "run", "--servers", "docker", "--block-secrets", "--verify-signatures"]
 cwd = "D:\\AI_VTI\\insighthub"
 startup_timeout_sec = 15
 tool_timeout_sec = 15

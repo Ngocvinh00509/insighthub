@@ -1,0 +1,86 @@
+name: IaC and deployment
+
+on:
+  pull_request:
+    paths: ["infra/**", "deploy/**", ".github/workflows/iac.yml"]
+  push:
+    branches: [main]
+    paths: ["infra/**", "deploy/**", ".github/workflows/iac.yml"]
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: "Apply reviewed saved plan (protected environment only)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  pull-requests: write
+  id-token: write
+
+concurrency:
+  group: insighthub-iac-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  static:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { persist-credentials: false }
+      - uses: hashicorp/setup-terraform@3c0c5d2e5b5d4c431f0e3f43ee8d4aa6d09b5f8d # pinned review required
+        with: { terraform_version: 1.15.9 }
+      - name: Format and validate isolated roots
+        run: |
+          terraform fmt -check -recursive infra
+          for root in bootstrap core platform; do terraform -chdir=infra/$root init -backend=false -input=false; terraform -chdir=infra/$root validate; done
+      - name: TFLint pinned tool
+        uses: terraform-linters/setup-tflint@v5 # replace with reviewed immutable SHA before enabling cloud jobs
+        with: { tflint_version: v0.64.0 }
+      - run: tflint --recursive
+      - name: Checkov
+        uses: bridgecrewio/checkov-action@v12 # replace with reviewed immutable SHA before enabling cloud jobs
+        with: { directory: infra, quiet: true }
+      - name: Helm render
+        run: |
+          helm lint deploy/helm/insighthub -f deploy/helm/insighthub/values-local.yaml
+          for env in local dev staging; do helm template insighthub deploy/helm/insighthub -f deploy/helm/insighthub/values-$env.yaml >/dev/null; done
+  plan:
+    needs: static
+    if: github.event.pull_request.head.repo.fork == false || github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    environment: plan-aws
+    permissions: { contents: read, pull-requests: write, id-token: write }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with: { persist-credentials: false }
+      - name: Require cloud inputs
+        env: { AWS_REGION: '${{ vars.AWS_REGION }}', PLAN_ROLE: '${{ vars.TF_PLAN_ROLE_ARN }}' }
+        run: test -n "$AWS_REGION" && test -n "$PLAN_ROLE" || { echo 'cloud inputs absent: plan intentionally blocked'; exit 1; }
+      - name: Assume reviewed OIDC plan role
+        uses: aws-actions/configure-aws-credentials@v5 # replace with reviewed immutable SHA before enabling cloud jobs
+        with: { role-to-assume: '${{ vars.TF_PLAN_ROLE_ARN }}', aws-region: '${{ vars.AWS_REGION }}' }
+      - name: Plan, checksum and sanitized summary
+        run: ./scripts/iac-plan.sh
+      - uses: actions/upload-artifact@v4 # replace with reviewed immutable SHA before enabling cloud jobs
+        with: { name: reviewed-tfplan, path: evidence/iac/plan.sha256, retention-days: 1 }
+      - name: PR review comment
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7 # replace with reviewed immutable SHA before enabling cloud jobs
+        with:
+          script: |
+            const body = process.env.SUMMARY;
+            await github.rest.issues.createComment({owner: context.repo.owner, repo: context.repo.repo, issue_number: context.issue.number, body});
+        env:
+          SUMMARY: '${{ steps.summary.outputs.text }}'
+  apply:
+    needs: plan
+    if: github.event_name == 'workflow_dispatch' && inputs.apply && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    environment: production
+    permissions: { contents: read, id-token: write }
+    steps:
+      - name: Apply gate
+        run: |
+          test -n '${{ vars.TF_APPLY_ROLE_ARN }}' || exit 1
+          echo 'Apply is enabled only after protected-environment review and reviewed artifact checksum verification.'

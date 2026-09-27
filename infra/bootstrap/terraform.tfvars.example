@@ -1,0 +1,5 @@
+aws_region        = "ap-southeast-1"
+state_bucket_name = "REPLACE_WITH_UNIQUE_APPROVED_BUCKET"
+environment       = "dev"
+owner             = "REPLACE_WITH_NAMED_OWNER"
+cost_center       = "REPLACE_WITH_COST_CENTER"

@@ -1,0 +1,6 @@
+local: { enabled: false }
+global: { environment: staging, ragMode: real }
+database: { url: "REPLACE_WITH_RDS_DATABASE_URL" }
+redis: { url: "REPLACE_WITH_ELASTICACHE_REDIS_URL" }
+providers: { llm: openai, embedding: openai }
+externalSecrets: { enabled: true, secretProviderClass: insighthub-app, objects: ["REPLACE_WITH_SECRET_ARN"] }

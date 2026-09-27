@@ -1,0 +1,14 @@
+global: { environment: dev, ragMode: fixture }
+images:
+  web: { repository: insighthub-web, tag: dev, pullPolicy: IfNotPresent }
+  api: { repository: insighthub-api, tag: dev, pullPolicy: IfNotPresent }
+  worker: { repository: insighthub-worker, tag: dev, pullPolicy: IfNotPresent }
+local: { enabled: true }
+database: { url: "postgresql://insighthub:insighthub@postgres:5432/insighthub" }
+redis: { url: "redis://redis:6379" }
+providers: { llm: fixture, embedding: fixture }
+resources: { requests: { cpu: 100m, memory: 256Mi }, limits: { cpu: "1", memory: 1Gi } }
+ingress: { enabled: true, className: nginx, host: insighthub.local, tlsSecret: "" }
+hpa: { enabled: true, minReplicas: 1, maxReplicas: 2, cpu: 70 }
+externalSecrets: { enabled: false, secretProviderClass: insighthub-app, objects: [] }
+serviceAccounts: { apiRoleArn: "", workerRoleArn: "" }

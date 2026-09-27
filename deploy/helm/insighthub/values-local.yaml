@@ -1,0 +1,4 @@
+local: { enabled: true }
+global: { environment: local, ragMode: fixture }
+providers: { llm: fixture, embedding: fixture }
+ingress: { enabled: false }

@@ -1,0 +1,70 @@
+{{- $labels := include "insighthub.labels" . }}
+{{- range $component := list "web" "api" "worker" }}
+{{- $image := index $.Values.images $component }}
+{{- $port := ternary 3000 8000 (eq $component "web") }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: insighthub-{{ $component }}
+  labels: { {{ $labels | replace "\n" ", " }} }
+  {{- if and (eq $component "api") $.Values.serviceAccounts.apiRoleArn }}
+  annotations: { eks.amazonaws.com/role-arn: {{ $.Values.serviceAccounts.apiRoleArn | quote }} }
+  {{- end }}
+  {{- if and (eq $component "worker") $.Values.serviceAccounts.workerRoleArn }}
+  annotations: { eks.amazonaws.com/role-arn: {{ $.Values.serviceAccounts.workerRoleArn | quote }} }
+  {{- end }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: insighthub-{{ $component }}, labels: { {{ $labels | replace "\n" ", " }} } }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app.kubernetes.io/name: insighthub, app.kubernetes.io/component: {{ $component }} } }
+  template:
+    metadata: { labels: { app.kubernetes.io/name: insighthub, app.kubernetes.io/component: {{ $component }} } }
+    spec:
+      serviceAccountName: insighthub-{{ $component }}
+      securityContext: { runAsNonRoot: true, seccompProfile: { type: RuntimeDefault } }
+      containers:
+        - name: {{ $component }}
+          image: {{ $image.repository }}:{{ $image.tag }}
+          imagePullPolicy: {{ $image.pullPolicy }}
+          ports: [{ containerPort: {{ $port }} }]
+          securityContext: { allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: ["ALL"] } }
+          resources: {{- toYaml $.Values.resources | nindent 12 }}
+          env:
+            - { name: RAG_MODE, value: {{ $.Values.global.ragMode | quote }} }
+            - { name: LLM_PROVIDER, value: {{ $.Values.providers.llm | quote }} }
+            - { name: EMBEDDING_PROVIDER, value: {{ $.Values.providers.embedding | quote }} }
+            - { name: DATABASE_URL, value: {{ $.Values.database.url | quote }} }
+            - { name: REDIS_URL, value: {{ $.Values.redis.url | quote }} }
+          {{- if ne $component "worker" }}
+          livenessProbe: { httpGet: { path: {{ ternary "/api/health" "/healthz" (eq $component "web") }}, port: {{ $port }} }, initialDelaySeconds: 10 }
+          readinessProbe: { httpGet: { path: {{ ternary "/api/health" "/readyz" (eq $component "web") }}, port: {{ $port }} }, initialDelaySeconds: 10 }
+          {{- end }}
+---
+{{- if ne $component "worker" }}
+apiVersion: v1
+kind: Service
+metadata: { name: insighthub-{{ $component }} }
+spec: { selector: { app.kubernetes.io/name: insighthub, app.kubernetes.io/component: {{ $component }} }, ports: [{ port: {{ $port }}, targetPort: {{ $port }} }] }
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata: { name: insighthub-{{ $component }} }
+spec:
+  scaleTargetRef: { apiVersion: apps/v1, kind: Deployment, name: insighthub-{{ $component }} }
+  minReplicas: {{ $.Values.hpa.minReplicas }}
+  maxReplicas: {{ $.Values.hpa.maxReplicas }}
+  metrics: [{ type: Resource, resource: { name: cpu, target: { type: Utilization, averageUtilization: {{ $.Values.hpa.cpu }} } } }]
+---
+{{- end }}
+{{- end }}
+{{- if .Values.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata: { name: insighthub-web }
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  rules: [{ host: {{ .Values.ingress.host }}, http: { paths: [{ path: "/", pathType: Prefix, backend: { service: { name: insighthub-web, port: { number: 3000 } } } }] } }]
+{{- end }}

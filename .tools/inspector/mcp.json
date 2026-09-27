@@ -1,0 +1,55 @@
+{
+  "mcpServers": {
+    "filesystem": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-filesystem@0.6.2",
+        "D:\\AI_VTI\\insighthub"
+      ],
+      "cwd": "D:\\AI_VTI\\insighthub"
+    },
+    "docker": {
+      "command": "docker",
+      "args": [
+        "run",
+        "--rm",
+        "-i",
+        "-v",
+        "/var/run/docker.sock:/var/run/docker.sock:ro",
+        "-e",
+        "DOCKER_MCP_SERVER_READONLY=1",
+        "ghcr.io/l337-org/docker-mcp-server@sha256:a57fae59c25e35e381a3123a743dad30998be0b88f402d20d1f9aa56bf8bbedc"
+      ],
+      "cwd": "D:\\AI_VTI\\insighthub"
+    },
+    "kubernetes": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "kubernetes-mcp-server@0.0.66",
+        "--kubeconfig=C:\\Users\\DO NGOC VINH\\.kube\\insighthub-mcp-readonly",
+        "--read-only",
+        "--disable-destructive",
+        "--disable-multi-cluster",
+        "--toolsets=core"
+      ],
+      "cwd": "D:\\AI_VTI\\insighthub"
+    },
+    "prometheus": {
+      "command": "node",
+      "args": [
+        "D:\\AI_VTI\\insighthub\\tools\\mcp\\src\\server.mjs"
+      ],
+      "cwd": "D:\\AI_VTI\\insighthub",
+      "env": {
+        "INSIGHTHUB_API_URL": "http://127.0.0.1:8000",
+        "INSIGHTHUB_PROMETHEUS_URL": "http://127.0.0.1:9090",
+        "INSIGHTHUB_MCP_PROMETHEUS": "1",
+        "INSIGHTHUB_MCP_TOOLS": "prometheus_summary",
+        "INSIGHTHUB_MCP_TIMEOUT_MS": "1500",
+        "INSIGHTHUB_MCP_MAX_BYTES": "65536"
+      }
+    }
+  }
+}
