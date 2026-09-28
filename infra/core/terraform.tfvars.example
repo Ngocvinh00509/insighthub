@@ -1,0 +1,11 @@
+aws_region          = "ap-southeast-1"
+environment         = "dev"
+owner               = "REPLACE_WITH_NAMED_OWNER"
+cost_center         = "REPLACE_WITH_COST_CENTER"
+vpc_cidr            = "10.42.0.0/20"
+availability_zones  = ["ap-southeast-1a", "ap-southeast-1b"]
+cluster_name        = "insighthub-dev"
+kubernetes_version  = "REPLACE_WITH_REGION_APPROVED_VERSION"
+lab_expiry          = "2026-09-28T12:00:00Z"
+github_plan_subject = "repo:REPLACE_OWNER/REPLACE_REPOSITORY:pull_request"
+github_apply_subject = "repo:REPLACE_OWNER/REPLACE_REPOSITORY:environment:lab-aws"

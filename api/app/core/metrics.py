@@ -41,6 +41,31 @@ ingestion_errors_total = Counter(
     "insighthub_ingestion_errors_total",
     "Failed processing attempts",
 )
+http_request_duration = Histogram(
+    "insighthub_http_request_duration_seconds",
+    "HTTP request duration by route template",
+    ["method", "endpoint", "status"],
+    buckets=(0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60),
+)
+ingestion_jobs_total = Counter(
+    "insighthub_ingestion_jobs_total",
+    "Ingestion worker job attempts by terminal attempt outcome",
+    ["outcome"],
+)
+ingestion_job_duration = Histogram(
+    "insighthub_ingestion_job_duration_seconds",
+    "Wall-clock duration of an ingestion worker attempt",
+    ["outcome"],
+    buckets=(0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 120, 300),
+)
+ingestion_retries_total = Counter(
+    "insighthub_ingestion_retries_total",
+    "Ingestion worker attempts deferred for retry",
+)
+ingestion_active_jobs = Gauge(
+    "insighthub_ingestion_active_jobs",
+    "Ingestion worker attempts currently executing",
+)
 
 
 def record_embedding_usage(provider, input_type, tokens, texts):

@@ -52,3 +52,15 @@ class QueueUnavailable(ServiceError):
     status_code = 503
     code = "queue_unavailable"
     message = "Hàng đợi xử lý tài liệu chưa sẵn sàng. Vui lòng thử lại."
+
+
+class UnsafePrompt(ServiceError):
+    status_code = 400
+    code = "unsafe_prompt"
+    message = "Yêu cầu chứa nội dung không an toàn và đã bị chặn."
+
+
+class GuardrailUnavailable(ServiceError):
+    status_code = 503
+    code = "guardrail_unavailable"
+    message = "Lớp bảo vệ AI chưa sẵn sàng. Vui lòng thử lại."

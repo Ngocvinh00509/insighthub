@@ -1,0 +1,10 @@
+local: { enabled: false }
+global: { environment: staging, ragMode: real }
+providers: { llm: openai, embedding: openai }
+ingress: { enabled: true, className: nginx, host: "REPLACE_WITH_DNS_NAME", tlsSecret: "REPLACE_WITH_TLS_SECRET" }
+externalSecrets:
+  enabled: true
+  secretProviderClass: insighthub-app
+  secretName: insighthub-app
+  secretArn: "REPLACE_WITH_APPLICATION_SECRET_ARN"
+  keys: [DATABASE_URL, REDIS_URL, OPENAI_API_KEY]

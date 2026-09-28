@@ -1,0 +1,49 @@
+global: { environment: dev, ragMode: fixture }
+images:
+  web: { repository: insighthub-web, tag: dev, pullPolicy: IfNotPresent }
+  api: { repository: insighthub-api, tag: dev, pullPolicy: IfNotPresent }
+  worker: { repository: insighthub-worker, tag: dev, pullPolicy: IfNotPresent }
+local: { enabled: true }
+database:
+  url: "postgresql://insighthub:insighthub@postgres:5432/insighthub"
+  bootstrap:
+    enabled: false
+    image: "pgvector/pgvector:0.8.2-pg16@sha256:00ba258a66dac104fd5171074a0084462a64a1369d8513f3d0a634e2f24d15bc"
+redis: { url: "redis://redis:6379" }
+providers: { llm: fixture, embedding: fixture }
+resources: { requests: { cpu: 100m, memory: 256Mi }, limits: { cpu: "1", memory: 1Gi } }
+ingress: { enabled: true, className: nginx, host: insighthub.local, tlsSecret: "" }
+hpa: { enabled: true, minReplicas: 1, maxReplicas: 2, cpu: 70 }
+observability:
+  enabled: false
+  workerMetricsPort: 9108
+  serviceMonitor:
+    interval: 30s
+    labels: { release: kube-prometheus-stack }
+  # Supply pre-created Secret names. No connection string or webhook is stored in Helm values.
+  exporters:
+    redis: { image: "oliver006/redis_exporter:v1.80.0", existingSecret: "" }
+    postgres: { image: "prometheuscommunity/postgres-exporter:v0.19.1", existingSecret: "" }
+    queue: { image: "insighthub-queue-exporter:dev", existingSecret: "" }
+externalSecrets:
+  enabled: false
+  secretProviderClass: insighthub-app
+  secretName: insighthub-app
+  secretArn: ""
+  # Keys are extracted from one Secrets Manager JSON secret and synced only to
+  # an in-namespace Secret while a pod mounts the CSI volume.
+  keys: [DATABASE_URL, REDIS_URL, OPENAI_API_KEY]
+serviceAccounts: { apiRoleArn: "", workerRoleArn: "" }
+chatops:
+  enabled: false
+  image: { repository: insighthub-chatops, tag: dev, pullPolicy: IfNotPresent }
+  replicas: 1
+  existingSecret: ""
+  queue: insighthub:chatops
+  namespace: insighthub-dev
+  readUsers: ""
+  diagnosticUsers: ""
+  mutationUsers: ""
+  approverUsers: ""
+  allowSelfApproval: "0"
+  resources: { requests: { cpu: 100m, memory: 128Mi }, limits: { cpu: 500m, memory: 256Mi } }

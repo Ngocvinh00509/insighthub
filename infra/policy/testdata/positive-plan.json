@@ -1,0 +1,38 @@
+{
+  "resource_changes": [
+    {
+      "address": "aws_db_instance.postgres",
+      "type": "aws_db_instance",
+      "change": {
+        "after": {
+          "publicly_accessible": false,
+          "storage_encrypted": true,
+          "tags_all": {
+            "project": "insighthub",
+            "environment": "dev",
+            "owner": "student",
+            "cost_center": "lab",
+            "managed_by": "terraform"
+          }
+        }
+      }
+    },
+    {
+      "address": "aws_elasticache_replication_group.redis",
+      "type": "aws_elasticache_replication_group",
+      "change": {
+        "after": {
+          "transit_encryption_enabled": true,
+          "at_rest_encryption_enabled": true,
+          "tags_all": {
+            "project": "insighthub",
+            "environment": "dev",
+            "owner": "student",
+            "cost_center": "lab",
+            "managed_by": "terraform"
+          }
+        }
+      }
+    }
+  ]
+}

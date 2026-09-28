@@ -9,7 +9,7 @@ tests:
         values: '60+0x10'
     alert_rule_test:
       - eval_time: 3m
-        alertname: IngestionQueueBacklogAnomaly
+        alertname: InsightHubRedisQueueBacklog
         exp_alerts:
           - exp_labels:
               namespace: insighthub-dev

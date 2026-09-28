@@ -1,0 +1,512 @@
+name: IaC and deployment
+
+on:
+  pull_request:
+    paths: ["infra/**", "deploy/**", ".github/workflows/iac.yml"]
+  push:
+    branches: [main]
+    paths: ["infra/**", "deploy/**", ".github/workflows/iac.yml"]
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: "Apply reviewed saved plan (protected environment only)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  pull-requests: write
+  id-token: write
+
+concurrency:
+  group: insighthub-iac-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  static:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { persist-credentials: false }
+      - uses: hashicorp/setup-terraform@3c0c5d2e5b5d4c431f0e3f43ee8d4aa6d09b5f8d # pinned review required
+        with: { terraform_version: 1.15.9 }
+      - name: Format and validate isolated roots
+        run: |
+          terraform fmt -check -recursive infra
+          for root in bootstrap core platform; do terraform -chdir=infra/$root init -backend=false -input=false; terraform -chdir=infra/$root validate; done
+      - name: TFLint pinned tool
+        uses: terraform-linters/setup-tflint@v5 # replace with reviewed immutable SHA before enabling cloud jobs
+        with: { tflint_version: v0.64.0 }
+      - name: Lint isolated Terraform roots
+        run: |
+          for root in bootstrap core platform; do
+            tflint --chdir=infra/$root --recursive
+          done
+      - name: Checkov
+        uses: bridgecrewio/checkov-action@v12 # replace with reviewed immutable SHA before enabling cloud jobs
+        with: { directory: infra, quiet: true }
+      - name: Helm render
+        run: |
+          helm lint deploy/helm/insighthub -f deploy/helm/insighthub/values-local.yaml
+          for env in local dev staging; do helm template insighthub deploy/helm/insighthub -f deploy/helm/insighthub/values-$env.yaml >/dev/null; done
+  core-plan:
+    needs: static
+    if: github.event.pull_request.head.repo.fork == false || github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    environment: plan-aws
+    permissions: { contents: read, pull-requests: write, id-token: write }
+
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
+      TF_CORE_STATE_KEY: ${{ vars.TF_CORE_STATE_KEY }}
+
+      TF_VAR_aws_region: ${{ vars.AWS_REGION }}
+      TF_VAR_environment: ${{ vars.TF_ENVIRONMENT }}
+      TF_VAR_owner: ${{ vars.TF_OWNER }}
+      TF_VAR_cost_center: ${{ vars.TF_COST_CENTER }}
+      TF_VAR_vpc_cidr: ${{ vars.TF_VPC_CIDR }}
+      TF_VAR_availability_zones: ${{ vars.TF_AVAILABILITY_ZONES }}
+      TF_VAR_cluster_name: ${{ vars.TF_CLUSTER_NAME }}
+      TF_VAR_kubernetes_version: ${{ vars.TF_KUBERNETES_VERSION }}
+      TF_VAR_lab_expiry: ${{ vars.TF_LAB_EXPIRY }}
+      TF_VAR_github_plan_subject: ${{ vars.TF_GITHUB_PLAN_SUBJECT }}
+      TF_VAR_github_apply_subject: ${{ vars.TF_GITHUB_APPLY_SUBJECT }}
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - uses: hashicorp/setup-terraform@3c0c5d2e5b5d4c431f0e3f43ee8d4aa6d09b5f8d
+        with:
+          terraform_version: 1.15.9
+
+      - name: Require cloud inputs
+        env:
+          AWS_REGION: ${{ vars.AWS_REGION }}
+          PLAN_ROLE: ${{ vars.TF_PLAN_ROLE_ARN }}
+          TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
+          TF_CORE_STATE_KEY: ${{ vars.TF_CORE_STATE_KEY }}
+        run: |
+          test -n "$AWS_REGION"
+          test -n "$PLAN_ROLE"
+          test -n "$TF_STATE_BUCKET"
+          test -n "$TF_CORE_STATE_KEY"
+
+      - name: Assume reviewed OIDC plan role
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ vars.TF_PLAN_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Terraform plan
+        run: ./scripts/iac-plan.sh
+
+      - name: Verify plan checksum
+        run: sha256sum -c evidence/iac/plan.sha256
+
+      - name: Upload reviewed plan evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: reviewed-tfplan
+          path: |
+            evidence/iac/core.tfplan
+            evidence/iac/core.tfplan.json
+            evidence/iac/plan.sha256
+            evidence/iac/summary.json
+          retention-days: 1
+
+  core-policy-check:
+    needs: core-plan
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Download reviewed plan evidence
+        uses: actions/download-artifact@v4
+        with:
+          name: reviewed-tfplan
+          path: evidence/iac
+
+      - name: Install Conftest
+        run: |
+          CONFTEST_VERSION="0.70.1"
+          curl -fsSL \
+            "https://github.com/open-policy-agent/conftest/releases/download/v${CONFTEST_VERSION}/conftest_${CONFTEST_VERSION}_Linux_x86_64.tar.gz" \
+            -o /tmp/conftest.tar.gz
+
+          gh attestation verify /tmp/conftest.tar.gz \
+            --repo open-policy-agent/conftest \
+            --signer-workflow open-policy-agent/conftest/.github/workflows/release.yaml \
+            --source-ref "refs/tags/v${CONFTEST_VERSION}" \
+            --deny-self-hosted-runners
+
+          tar -xzf /tmp/conftest.tar.gz -C /tmp conftest
+          sudo install /tmp/conftest /usr/local/bin/conftest
+
+          conftest --version
+
+      - name: Verify policy unit tests
+        run: conftest verify -p infra/policy/terraform
+
+      - name: Policy check reviewed Terraform plan
+        run: |
+          conftest test \
+            evidence/iac/core.tfplan.json \
+            -p infra/policy/terraform
+
+  core-cost-estimate:
+    needs: core-policy-check
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Download reviewed plan evidence
+        uses: actions/download-artifact@v4
+        with:
+          name: reviewed-tfplan
+          path: evidence/iac
+
+      - name: Require Infracost API key
+        env:
+          INFRACOST_API_KEY: ${{ secrets.INFRACOST_API_KEY }}
+        run: |
+          test -n "$INFRACOST_API_KEY" || {
+            echo "INFRACOST_API_KEY is not configured"
+            exit 1
+          }
+
+      - name: Setup Infracost
+        uses: infracost/actions/setup@v3
+        with:
+          api-key: ${{ secrets.INFRACOST_API_KEY }}
+
+      - name: Estimate infrastructure cost
+        run: |
+          infracost breakdown \
+            --path evidence/iac/core.tfplan.json \
+            --format json \
+            --out-file evidence/iac/infracost.json
+
+          infracost output \
+            --path evidence/iac/infracost.json \
+            --format table
+
+  core-apply:
+    needs: core-cost-estimate
+    if: github.event_name == 'workflow_dispatch' && inputs.apply && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    # Configure required reviewers on this environment in repository settings.
+    # Its name is deliberately the exact OIDC subject configured in Terraform.
+    environment: lab-aws
+    permissions: { contents: read, id-token: write }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - uses: hashicorp/setup-terraform@3c0c5d2e5b5d4c431f0e3f43ee8d4aa6d09b5f8d
+        with:
+          terraform_version: 1.15.9
+
+      - name: Download reviewed plan evidence
+        uses: actions/download-artifact@v4
+        with:
+          name: reviewed-tfplan
+          path: evidence/iac
+
+      - name: Require reviewed apply inputs
+        env:
+          AWS_REGION: ${{ vars.AWS_REGION }}
+          APPLY_ROLE: ${{ vars.TF_APPLY_ROLE_ARN }}
+          TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
+          TF_CORE_STATE_KEY: ${{ vars.TF_CORE_STATE_KEY }}
+        run: |
+          test -n "$AWS_REGION"
+          test -n "$APPLY_ROLE"
+          test -n "$TF_STATE_BUCKET"
+          test -n "$TF_CORE_STATE_KEY"
+
+      - name: Assume reviewed OIDC apply role
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ vars.TF_APPLY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Reconfigure the reviewed state backend
+        env:
+          AWS_REGION: ${{ vars.AWS_REGION }}
+          TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
+          TF_CORE_STATE_KEY: ${{ vars.TF_CORE_STATE_KEY }}
+        run: |
+          terraform -chdir=infra/core init -input=false -reconfigure \
+            -backend-config="bucket=${TF_STATE_BUCKET}" \
+            -backend-config="key=${TF_CORE_STATE_KEY}" \
+            -backend-config="region=${AWS_REGION}" \
+            -backend-config="encrypt=true" \
+            -backend-config="use_lockfile=true"
+
+      - name: Verify reviewed plan checksum
+        run: sha256sum -c evidence/iac/plan.sha256
+
+      - name: Apply exactly the reviewed Core plan
+        run: |
+          terraform -chdir=infra/core apply -input=false ../../evidence/iac/core.tfplan
+
+  platform-plan:
+    needs: core-apply
+    if: github.event_name == 'workflow_dispatch' && inputs.apply && github.ref == 'refs/heads/main'
+    # This label is intentionally required: GitHub-hosted runners cannot reach
+    # the private EKS endpoint or private RDS/ElastiCache subnets.
+    runs-on: [self-hosted, linux, x64, insighthub-private-vpc]
+    environment: plan-aws
+    permissions: { contents: read, id-token: write }
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
+      TF_PLATFORM_STATE_KEY: ${{ vars.TF_PLATFORM_STATE_KEY }}
+      TF_CORE_STATE_KEY: ${{ vars.TF_CORE_STATE_KEY }}
+      TF_VAR_aws_region: ${{ vars.AWS_REGION }}
+      TF_VAR_environment: ${{ vars.TF_ENVIRONMENT }}
+      TF_VAR_owner: ${{ vars.TF_OWNER }}
+      TF_VAR_cost_center: ${{ vars.TF_COST_CENTER }}
+      TF_VAR_lab_expiry: ${{ vars.TF_LAB_EXPIRY }}
+      TF_VAR_core_state_bucket: ${{ vars.TF_STATE_BUCKET }}
+      TF_VAR_core_state_key: ${{ vars.TF_CORE_STATE_KEY }}
+      TF_VAR_core_state_region: ${{ vars.AWS_REGION }}
+      TF_VAR_namespace: insighthub-dev
+      TF_VAR_db_engine_version: ${{ vars.TF_DB_ENGINE_VERSION }}
+      TF_VAR_redis_engine_version: ${{ vars.TF_REDIS_ENGINE_VERSION }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with: { persist-credentials: false }
+      - uses: hashicorp/setup-terraform@3c0c5d2e5b5d4c431f0e3f43ee8d4aa6d09b5f8d
+        with: { terraform_version: 1.15.9 }
+      - name: Require Platform inputs
+        run: |
+          test -n "$AWS_REGION"
+          test -n "$TF_STATE_BUCKET"
+          test -n "$TF_CORE_STATE_KEY"
+          test -n "$TF_PLATFORM_STATE_KEY"
+          test -n "$TF_VAR_db_engine_version"
+          test -n "$TF_VAR_redis_engine_version"
+      - name: Assume reviewed OIDC plan role
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ vars.TF_PLAN_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - name: Create reviewed Platform plan
+        run: |
+          mkdir -p evidence/iac/platform
+          terraform -chdir=infra/platform init -input=false -reconfigure \
+            -backend-config="bucket=${TF_STATE_BUCKET}" \
+            -backend-config="key=${TF_PLATFORM_STATE_KEY}" \
+            -backend-config="region=${AWS_REGION}" \
+            -backend-config="encrypt=true" \
+            -backend-config="use_lockfile=true"
+          terraform -chdir=infra/platform plan -input=false -out=../../evidence/iac/platform/platform.tfplan
+          terraform -chdir=infra/platform show -json ../../evidence/iac/platform/platform.tfplan > evidence/iac/platform/platform.tfplan.json
+          sha256sum evidence/iac/platform/platform.tfplan > evidence/iac/platform/plan.sha256
+      - run: sha256sum -c evidence/iac/platform/plan.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: reviewed-platform-tfplan
+          path: evidence/iac/platform/
+          retention-days: 1
+
+  platform-policy-check:
+    needs: platform-plan
+    runs-on: ubuntu-24.04
+    permissions: { contents: read }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with: { persist-credentials: false }
+      - uses: actions/download-artifact@v4
+        with: { name: reviewed-platform-tfplan, path: evidence/iac/platform }
+      - name: Install Conftest
+        run: |
+          CONFTEST_VERSION="0.70.1"
+          curl -fsSL "https://github.com/open-policy-agent/conftest/releases/download/v${CONFTEST_VERSION}/conftest_${CONFTEST_VERSION}_Linux_x86_64.tar.gz" -o /tmp/conftest.tar.gz
+          gh attestation verify /tmp/conftest.tar.gz \
+            --repo open-policy-agent/conftest \
+            --signer-workflow open-policy-agent/conftest/.github/workflows/release.yaml \
+            --source-ref "refs/tags/v${CONFTEST_VERSION}" \
+            --deny-self-hosted-runners
+          tar -xzf /tmp/conftest.tar.gz -C /tmp conftest
+          sudo install /tmp/conftest /usr/local/bin/conftest
+      - run: conftest verify -p infra/policy/terraform
+      - run: conftest test evidence/iac/platform/platform.tfplan.json -p infra/policy/terraform
+
+  platform-cost-estimate:
+    needs: platform-policy-check
+    runs-on: ubuntu-24.04
+    permissions: { contents: read }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with: { persist-credentials: false }
+      - uses: actions/download-artifact@v4
+        with: { name: reviewed-platform-tfplan, path: evidence/iac/platform }
+      - env:
+          INFRACOST_API_KEY: ${{ secrets.INFRACOST_API_KEY }}
+        run: test -n "$INFRACOST_API_KEY"
+      - uses: infracost/actions/setup@v3
+        with:
+          api-key: ${{ secrets.INFRACOST_API_KEY }}
+      - run: |
+          infracost breakdown --path evidence/iac/platform/platform.tfplan.json --format json --out-file evidence/iac/platform/infracost.json
+          infracost output --path evidence/iac/platform/infracost.json --format table
+
+  platform-apply:
+    needs: platform-cost-estimate
+    if: github.event_name == 'workflow_dispatch' && inputs.apply && github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, linux, x64, insighthub-private-vpc]
+    environment: lab-aws-platform
+    permissions: { contents: read, id-token: write }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with: { persist-credentials: false }
+      - uses: hashicorp/setup-terraform@3c0c5d2e5b5d4c431f0e3f43ee8d4aa6d09b5f8d
+        with: { terraform_version: 1.15.9 }
+      - uses: actions/download-artifact@v4
+        with: { name: reviewed-platform-tfplan, path: evidence/iac/platform }
+      - name: Assume reviewed OIDC apply role
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ vars.TF_APPLY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - name: Reconfigure Platform backend and apply reviewed plan
+        env:
+          AWS_REGION: ${{ vars.AWS_REGION }}
+          TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
+          TF_PLATFORM_STATE_KEY: ${{ vars.TF_PLATFORM_STATE_KEY }}
+        run: |
+          terraform -chdir=infra/platform init -input=false -reconfigure \
+            -backend-config="bucket=${TF_STATE_BUCKET}" \
+            -backend-config="key=${TF_PLATFORM_STATE_KEY}" \
+            -backend-config="region=${AWS_REGION}" \
+            -backend-config="encrypt=true" \
+            -backend-config="use_lockfile=true"
+          sha256sum -c evidence/iac/platform/plan.sha256
+          terraform -chdir=infra/platform apply -input=false ../../evidence/iac/platform/platform.tfplan
+
+  install-secrets-store-csi:
+    needs: platform-apply
+    runs-on: [self-hosted, linux, x64, insighthub-private-vpc]
+    environment: lab-aws-platform
+    permissions: { contents: read, id-token: write }
+    steps:
+      - name: Require reviewed CSI chart version
+        env:
+          CSI_AWS_PROVIDER_CHART_VERSION: ${{ vars.CSI_AWS_PROVIDER_CHART_VERSION }}
+        run: test -n "$CSI_AWS_PROVIDER_CHART_VERSION"
+      - uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ vars.TF_APPLY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - name: Install pinned AWS Secrets Store CSI provider and its driver dependency
+        env:
+          CLUSTER_NAME: ${{ vars.TF_CLUSTER_NAME }}
+          AWS_REGION: ${{ vars.AWS_REGION }}
+          CSI_AWS_PROVIDER_CHART_VERSION: ${{ vars.CSI_AWS_PROVIDER_CHART_VERSION }}
+        run: |
+          aws eks update-kubeconfig --name "$CLUSTER_NAME" --region "$AWS_REGION"
+          helm repo add aws-secrets-manager https://aws.github.io/secrets-store-csi-driver-provider-aws
+          helm upgrade --install secrets-provider-aws aws-secrets-manager/secrets-store-csi-driver-provider-aws \
+            --namespace kube-system --version "$CSI_AWS_PROVIDER_CHART_VERSION" \
+            --set driverWritesSecrets=true
+
+  deploy-helm:
+    needs: install-secrets-store-csi
+    runs-on: [self-hosted, linux, x64, insighthub-private-vpc]
+    environment: lab-aws-platform
+    permissions: { contents: read, id-token: write }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with: { persist-credentials: false }
+      - uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ vars.TF_APPLY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - name: Require deployment inputs
+        env:
+          CLUSTER_NAME: ${{ vars.TF_CLUSTER_NAME }}
+          INSIGHTHUB_HOST: ${{ vars.INSIGHTHUB_HOST }}
+          INSIGHTHUB_TLS_SECRET: ${{ vars.INSIGHTHUB_TLS_SECRET }}
+          IMAGE_TAG: ${{ vars.IMAGE_TAG }}
+        run: |
+          test -n "$CLUSTER_NAME"
+          test -n "$INSIGHTHUB_HOST"
+          test -n "$INSIGHTHUB_TLS_SECRET"
+          test -n "$IMAGE_TAG"
+      - name: Deploy managed-endpoint configuration without hard-coded values
+        env:
+          AWS_REGION: ${{ vars.AWS_REGION }}
+          CLUSTER_NAME: ${{ vars.TF_CLUSTER_NAME }}
+          NAMESPACE: insighthub-dev
+          INSIGHTHUB_HOST: ${{ vars.INSIGHTHUB_HOST }}
+          INSIGHTHUB_TLS_SECRET: ${{ vars.INSIGHTHUB_TLS_SECRET }}
+          IMAGE_TAG: ${{ vars.IMAGE_TAG }}
+        run: |
+          aws eks update-kubeconfig --name "$CLUSTER_NAME" --region "$AWS_REGION"
+          ECR_REPOSITORY="$(terraform -chdir=infra/core output -raw ecr_repository_url)"
+          APP_SECRET_ARN="$(terraform -chdir=infra/platform output -raw application_secret_arn)"
+          API_ROLE_ARN="$(terraform -chdir=infra/platform output -raw api_irsa_role_arn)"
+          WORKER_ROLE_ARN="$(terraform -chdir=infra/platform output -raw worker_irsa_role_arn)"
+          helm upgrade --install insighthub deploy/helm/insighthub --namespace "$NAMESPACE" \
+            -f deploy/helm/insighthub/values-dev.yaml \
+            --set local.enabled=false \
+            --set externalSecrets.enabled=true \
+            --set-string externalSecrets.secretArn="$APP_SECRET_ARN" \
+            --set-string serviceAccounts.apiRoleArn="$API_ROLE_ARN" \
+            --set-string serviceAccounts.workerRoleArn="$WORKER_ROLE_ARN" \
+            --set-string images.web.repository="$ECR_REPOSITORY" --set-string images.web.tag="web-$IMAGE_TAG" \
+            --set-string images.api.repository="$ECR_REPOSITORY" --set-string images.api.tag="api-$IMAGE_TAG" \
+            --set-string images.worker.repository="$ECR_REPOSITORY" --set-string images.worker.tag="worker-$IMAGE_TAG" \
+            --set ingress.enabled=true --set-string ingress.host="$INSIGHTHUB_HOST" \
+            --set-string ingress.tlsSecret="$INSIGHTHUB_TLS_SECRET" \
+            --set database.bootstrap.enabled=true --set-file database.bootstrap.sql=infra/db/init.sql \
+            --wait --timeout 10m
+          kubectl rollout status deployment/insighthub-web -n "$NAMESPACE" --timeout=5m
+          kubectl rollout status deployment/insighthub-api -n "$NAMESPACE" --timeout=5m
+          kubectl rollout status deployment/insighthub-worker -n "$NAMESPACE" --timeout=5m
+
+  smoke-validation:
+    needs: deploy-helm
+    runs-on: [self-hosted, linux, x64, insighthub-private-vpc]
+    environment: lab-aws-platform
+    permissions: { contents: read, id-token: write }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with: { persist-credentials: false }
+      - uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ vars.TF_APPLY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - name: Smoke through private Kubernetes access
+        env:
+          CLUSTER_NAME: ${{ vars.TF_CLUSTER_NAME }}
+          AWS_REGION: ${{ vars.AWS_REGION }}
+          NAMESPACE: insighthub-dev
+          INSIGHTHUB_HOST: ${{ vars.INSIGHTHUB_HOST }}
+        run: |
+          test -n "$INSIGHTHUB_HOST"
+          aws eks update-kubeconfig --name "$CLUSTER_NAME" --region "$AWS_REGION"
+          curl --fail --show-error --silent "https://$INSIGHTHUB_HOST/api/health"
+          kubectl port-forward -n "$NAMESPACE" svc/insighthub-api 18000:8000 >/tmp/insighthub-api-port-forward.log 2>&1 &
+          api_pid=$!
+          kubectl port-forward -n "$NAMESPACE" svc/insighthub-web 13000:3000 >/tmp/insighthub-web-port-forward.log 2>&1 &
+          web_pid=$!
+          trap 'kill "$api_pid" "$web_pid"' EXIT
+          sleep 5
+          python3 scripts/verify.py smoke --api-url http://127.0.0.1:18000 --web-url http://127.0.0.1:13000

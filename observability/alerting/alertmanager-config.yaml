@@ -1,0 +1,22 @@
+apiVersion: monitoring.coreos.com/v1alpha1
+kind: AlertmanagerConfig
+metadata:
+  name: insighthub-slack-alerts
+  namespace: monitoring
+  labels: { release: kube-prometheus-stack, app.kubernetes.io/part-of: insighthub }
+spec:
+  route:
+    matchers: [{ name: team, value: insighthub, matchType: "=" }]
+    receiver: slack-alerts
+    groupBy: [alertname, namespace, severity]
+    groupWait: 30s
+    groupInterval: 5m
+    repeatInterval: 4h
+  receivers:
+    - name: slack-alerts
+      slackConfigs:
+        - apiURL: { name: insighthub-alertmanager-slack, key: webhook_url }
+          channel: "#alerts"
+          sendResolved: true
+          title: "[{{ .Status | toUpper }}] {{ .CommonLabels.alertname }}"
+          text: "{{ range .Alerts }}*Alert:* {{ .Labels.alertname }}\n*Severity:* {{ .Labels.severity }}\n*Service:* {{ .Labels.service }}\n*Started:* {{ .StartsAt }}\n*Summary:* {{ .Annotations.summary }}\n{{ end }}"

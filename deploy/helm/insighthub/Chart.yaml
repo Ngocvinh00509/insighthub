@@ -1,0 +1,6 @@
+apiVersion: v2
+name: insighthub
+description: Day 3 InsightHub deployment; local stateful dependencies or AWS managed endpoints.
+type: application
+version: 0.1.0
+appVersion: "0.2.3"

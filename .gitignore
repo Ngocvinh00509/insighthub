@@ -44,3 +44,6 @@ tmp/
 evidence/
 reports/
 *.tsbuildinfo
+
+# Local Terraform backend configuration
+backend.hcl

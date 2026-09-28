@@ -111,6 +111,7 @@ services:
     command: ["--config", "/app/config.yaml"]
     volumes:
       - ./security/litellm-config.yaml:/app/config.yaml:ro
+      - ./security/litellm_prompt_cache_savings.py:/app/litellm_prompt_cache_savings.py:ro
     environment:
       DATABASE_URL: postgresql://insighthub:insighthub@postgres:5432/insighthub
       LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-}
@@ -118,6 +119,9 @@ services:
       LITELLM_UPSTREAM_CHAT_MODEL: ${LITELLM_UPSTREAM_CHAT_MODEL:-openai/gpt-4o-mini}
       LITELLM_FALLBACK_CHAT_MODEL: ${LITELLM_FALLBACK_CHAT_MODEL:-openai/gpt-4o-mini}
       LITELLM_UPSTREAM_EMBEDDING_MODEL: ${LITELLM_UPSTREAM_EMBEDDING_MODEL:-openai/text-embedding-3-small}
+      # Map LiteLLM model names to the actual input-minus-cache-read price
+      # differential in USD per million tokens. Empty means savings stay absent.
+      LITELLM_PROMPT_CACHE_SAVINGS_USD_PER_MILLION_BY_MODEL: ${LITELLM_PROMPT_CACHE_SAVINGS_USD_PER_MILLION_BY_MODEL:-}
     ports: ["127.0.0.1:${LITELLM_PORT:-4000}:4000"]
     depends_on:
       postgres: {condition: service_healthy}
