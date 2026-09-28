@@ -59,6 +59,8 @@ class Settings(BaseSettings):
     provider_timeout_seconds: float = Field(
         default=60, gt=0, le=300, allow_inf_nan=False
     )
+    guardrail_mode: Literal["local", "http"] = "local"
+    guardrail_url: str = Field(default="", repr=False)
     embedding_batch_size: int = Field(default=32, ge=1, le=100)
     chunk_size: int = Field(default=800, ge=2, le=8000)
     chunk_overlap: int = Field(default=100, ge=0)
@@ -70,6 +72,10 @@ class Settings(BaseSettings):
     def validate_configuration(self):
         if self.chunk_overlap >= self.chunk_size:
             raise ValueError("CHUNK_OVERLAP must be smaller than CHUNK_SIZE")
+        if self.guardrail_mode == "http":
+            parsed = urlsplit(self.guardrail_url)
+            if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment:
+                raise ValueError("GUARDRAIL_URL must be an explicit HTTP(S) URL without credentials/query")
         if self.rag_mode == "fixture":
             if self.llm_provider != "fixture" or self.embedding_provider != "fixture":
                 raise ValueError("RAG_MODE=fixture requires both providers=fixture")
