@@ -14,6 +14,17 @@ providers: { llm: fixture, embedding: fixture }
 resources: { requests: { cpu: 100m, memory: 256Mi }, limits: { cpu: "1", memory: 1Gi } }
 ingress: { enabled: true, className: nginx, host: insighthub.local, tlsSecret: "" }
 hpa: { enabled: true, minReplicas: 1, maxReplicas: 2, cpu: 70 }
+observability:
+  enabled: false
+  workerMetricsPort: 9108
+  serviceMonitor:
+    interval: 30s
+    labels: { release: kube-prometheus-stack }
+  # Supply pre-created Secret names. No connection string or webhook is stored in Helm values.
+  exporters:
+    redis: { image: "oliver006/redis_exporter:v1.80.0", existingSecret: "" }
+    postgres: { image: "prometheuscommunity/postgres-exporter:v0.19.1", existingSecret: "" }
+    queue: { image: "insighthub-queue-exporter:dev", existingSecret: "" }
 externalSecrets:
   enabled: false
   secretProviderClass: insighthub-app

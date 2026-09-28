@@ -1,0 +1,57 @@
+{{- if .Values.observability.enabled }}
+{{- $labels := include "insighthub.labels" . }}
+{{- range $component := list "web" "api" "worker" }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: insighthub-{{ $component }}-metrics
+  labels:
+{{ toYaml $.Values.observability.serviceMonitor.labels | indent 4 }}
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/part-of: insighthub
+      app.kubernetes.io/component: {{ $component }}
+  endpoints: [{ port: http-metrics, path: /metrics, interval: {{ $.Values.observability.serviceMonitor.interval | quote }} }]
+---
+{{- end }}
+{{- range $name := list "redis" "postgres" "queue" }}
+{{- $cfg := index $.Values.observability.exporters $name }}
+{{- if not $cfg.existingSecret }}{{ fail (printf "observability.exporters.%s.existingSecret is required when observability.enabled=true" $name) }}{{ end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: insighthub-{{ $name }}-exporter, labels: { {{ $labels | replace "\n" ", " }}, app.kubernetes.io/component: {{ $name }}-exporter } }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app.kubernetes.io/name: insighthub, app.kubernetes.io/component: {{ $name }}-exporter } }
+  template:
+    metadata: { labels: { app.kubernetes.io/name: insighthub, app.kubernetes.io/part-of: insighthub, app.kubernetes.io/component: {{ $name }}-exporter } }
+    spec:
+      containers:
+        - name: exporter
+          image: {{ $cfg.image | quote }}
+          ports: [{ name: http-metrics, containerPort: {{ ternary 9187 (ternary 9121 9115 (eq $name "redis")) (eq $name "postgres") }} }]
+          envFrom: [{ secretRef: { name: {{ $cfg.existingSecret | quote }} } }]
+          {{- if eq $name "redis" }}
+          env: [{ name: REDIS_ADDR, valueFrom: { secretKeyRef: { name: {{ $cfg.existingSecret | quote }}, key: REDIS_ADDR } } }]
+          {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata: { name: insighthub-{{ $name }}-exporter, labels: { {{ $labels | replace "\n" ", " }}, app.kubernetes.io/component: {{ $name }}-exporter } }
+spec:
+  selector: { app.kubernetes.io/name: insighthub, app.kubernetes.io/component: {{ $name }}-exporter }
+  ports: [{ name: http-metrics, port: {{ ternary 9187 (ternary 9121 9115 (eq $name "redis")) (eq $name "postgres") }}, targetPort: http-metrics }]
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: insighthub-{{ $name }}-exporter
+  labels:
+{{ toYaml $.Values.observability.serviceMonitor.labels | indent 4 }}
+spec:
+  selector: { matchLabels: { app.kubernetes.io/part-of: insighthub, app.kubernetes.io/component: {{ $name }}-exporter } }
+  endpoints: [{ port: http-metrics, path: /metrics, interval: {{ $.Values.observability.serviceMonitor.interval | quote }} }]
+---
+{{- end }}
+{{- end }}
