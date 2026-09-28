@@ -18,6 +18,18 @@ triển khai ServiceMonitor. Bật `observability.enabled=true` chỉ sau khi
 - Exporter nhận connection values qua các Secret đã tồn tại. Helm không tạo
   secret, không chứa DSN, password hoặc webhook.
 
+Grafana dashboard provisioned nằm tại
+`grafana-dashboards/insighthub-day4.json`; dashboard có các panel FinOps lấy
+spend, tokens, provider prompt-cache ratio và savings metric theo ba LiteLLM
+virtual-key aliases. Với local Compose, bật profile `litellm` để Prometheus
+scrape `litellm:4000/metrics`. Khi chạy trên Kubernetes, cấu hình Prometheus
+scrape LiteLLM service nội bộ tương ứng; không public metrics endpoint.
+
+$/day trong dashboard là extrapolation của burn rate 5 phút gần nhất, không
+phải hoá đơn/ngày đã chốt. Prompt-cache savings chỉ xuất hiện nếu cấu hình giá
+chênh lệch theo model trong `.env`; LiteLLM cached-token telemetry tự nó không
+chứa giá USD tiết kiệm được.
+
 Secret Redis exporter cần key `REDIS_ADDR`; PostgreSQL exporter cần
 `DATA_SOURCE_NAME`; queue exporter cần `REDIS_URL` và tùy chọn
 `INGESTION_QUEUE`. Các key có thể cùng nằm trong một Secret hoặc dùng Secret

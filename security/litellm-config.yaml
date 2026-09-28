@@ -22,6 +22,7 @@ general_settings:
 litellm_settings:
   callbacks:
     - prometheus
+    - litellm_prompt_cache_savings.prompt_cache_savings_logger
   prometheus_initialize_budget_metrics: true
   # Budget checks require the PostgreSQL database above; do not run budgeted keys DB-less.
   upperbound_key_generate_params:

@@ -170,19 +170,66 @@
     },
     {
       "id": 13,
-      "title": "LLM cost rate when LiteLLM billing telemetry is enabled",
-      "description": "Uses LiteLLM spend telemetry only when the optional gateway exports it. No cost is inferred from token counts when this series is absent.",
+      "title": "FinOps - LiteLLM spend rate by virtual key ($/hour)",
+      "description": "Actual USD spend counter from LiteLLM, converted to hourly burn rate. Requires the optional LiteLLM profile and Prometheus callback.",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 32 },
-      "targets": [{ "expr": "sum(rate(litellm_spend_metric_total{namespace=\"$namespace\"}[5m])) by (api_key_alias)", "legendFormat": "{{api_key_alias}} USD/s", "refId": "A" }],
+      "targets": [{ "expr": "sum by (api_key_alias) (rate(litellm_spend_metric_total{api_key_alias=~\"insighthub-app-key|chatops-bot-key|coding-workflow-key\"}[5m])) * 3600", "legendFormat": "{{api_key_alias}} $/hour", "refId": "A" }],
       "fieldConfig": { "defaults": { "unit": "currencyUSD" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } }
+    },
+    {
+      "id": 14,
+      "title": "FinOps - Projected LiteLLM spend rate by virtual key ($/day)",
+      "description": "Recent five-minute actual spend rate extrapolated to 24 hours; this is a run-rate projection, not billed daily spend.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 40 },
+      "targets": [{ "expr": "sum by (api_key_alias) (rate(litellm_spend_metric_total{api_key_alias=~\"insighthub-app-key|chatops-bot-key|coding-workflow-key\"}[5m])) * 86400", "legendFormat": "{{api_key_alias}} projected $/day", "refId": "A" }],
+      "fieldConfig": { "defaults": { "unit": "currencyUSD", "decimals": 4 }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } }
+    },
+    {
+      "id": 15,
+      "title": "FinOps - Prompt and completion tokens in selected range",
+      "description": "Actual input (prompt) and output (completion) token counter increases from LiteLLM for the selected dashboard time range.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 40 },
+      "targets": [
+        { "expr": "sum by (api_key_alias) (increase(litellm_input_tokens_metric_total{api_key_alias=~\"insighthub-app-key|chatops-bot-key|coding-workflow-key\"}[$__range]))", "legendFormat": "{{api_key_alias}} prompt tokens", "refId": "A" },
+        { "expr": "sum by (api_key_alias) (increase(litellm_output_tokens_metric_total{api_key_alias=~\"insighthub-app-key|chatops-bot-key|coding-workflow-key\"}[$__range]))", "legendFormat": "{{api_key_alias}} completion tokens", "refId": "B" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } }
+    },
+    {
+      "id": 16,
+      "title": "FinOps - Provider prompt-cache token hit ratio",
+      "description": "Cached prompt tokens divided by total prompt tokens, grouped by virtual key. This is a token-weighted cache ratio, not request hit rate. LiteLLM response-cache hits are a separate metric.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 48 },
+      "targets": [{ "expr": "sum by (api_key_alias) (rate(litellm_input_cached_tokens_metric_total{api_key_alias=~\"insighthub-app-key|chatops-bot-key|coding-workflow-key\"}[5m])) / clamp_min(sum by (api_key_alias) (rate(litellm_input_tokens_metric_total{api_key_alias=~\"insighthub-app-key|chatops-bot-key|coding-workflow-key\"}[5m])), 1)", "legendFormat": "{{api_key_alias}}", "refId": "A" }],
+      "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1, "decimals": 2 }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } }
+    },
+    {
+      "id": 17,
+      "title": "FinOps - Estimated provider prompt-cache savings in selected range",
+      "description": "Actual cached-token counts priced using operator-supplied model-specific USD savings per million tokens. No configured rate or no cache data leaves this panel empty; savings are not inferred from spend.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 48 },
+      "targets": [{ "expr": "sum by (api_key_alias) (increase(insighthub_litellm_prompt_cache_savings_usd_total{api_key_alias=~\"insighthub-app-key|chatops-bot-key|coding-workflow-key\"}[$__range]))", "legendFormat": "{{api_key_alias}} USD saved (estimated)", "refId": "A" }],
+      "fieldConfig": { "defaults": { "unit": "currencyUSD", "decimals": 6, "min": 0 }, "overrides": [] },
       "options": { "legend": { "displayMode": "table", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } }
     }
   ],
   "refresh": "30s",
   "schemaVersion": 39,
-  "tags": ["insighthub", "day4", "red", "use", "ingestion"],
+  "tags": ["insighthub", "day4", "red", "use", "ingestion", "finops", "litellm"],
   "templating": {
     "list": [
       {
@@ -200,7 +247,7 @@
     ]
   },
   "time": { "from": "now-6h", "to": "now" },
-  "title": "InsightHub Day 4 - RED, Ingestion and USE",
+  "title": "InsightHub Day 4 - RED, Ingestion, USE & FinOps",
   "uid": "insighthub-day4",
-  "version": 1
+  "version": 2
 }

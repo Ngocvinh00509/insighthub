@@ -1,25 +1,43 @@
-# InsightHub threat model
+# InsightHub Threat Model — STRIDE / OWASP LLM Top 10
 
-## Scope and trust boundaries
+## Scope, assets, and trust boundaries
 
-InsightHub accepts untrusted documents and questions, stores embeddings in PostgreSQL,
-retrieves ready document chunks, and sends a constructed prompt to an LLM provider.
-ChatOps accepts Slack events and can query bounded read-only MCP services. LiteLLM is an
-optional gateway for scoped virtual keys and spend tracking. The principal trust
-boundaries are: browser/Slack to API, document corpus to RAG prompt, API to LLM provider,
-ChatOps to MCP, and LiteLLM to provider/billing systems.
+InsightHub accepts browser/API questions and uploaded documents, ingests them asynchronously,
+retrieves ready chunks from PostgreSQL, and sends prompts to a configured LLM provider. The
+optional LiteLLM gateway handles virtual keys, provider routing, budgets, and telemetry.
+ChatOps accepts Slack events, queues authenticated events through Redis/ARQ, and calls
+configured Kubernetes or Prometheus MCP processes. The principal trust boundaries are:
 
-Risk ratings use the highest plausible impact if the threat is exploited in a production
-deployment. A control described as configurable is not evidence that it is enabled in a
-specific environment.
+- browser or Slack → API / ChatOps ingress;
+- uploaded document corpus → retrieved RAG context → model;
+- API → LLM provider or LiteLLM;
+- ChatOps worker → configured MCP process → Kubernetes/Prometheus;
+- services → PostgreSQL, Redis, logs, and secret injection mechanism.
 
-## Threat 1 — Indirect prompt injection through a poisoned RAG document
+Assets include user/document data and PII, prompts and model responses, provider and Slack
+credentials, Kubernetes permissions, queue integrity/availability, and provider budget.
+Impact ratings below describe plausible production impact, not a claim that an attack has
+occurred. “Implemented” means code/configuration exists in this repository; it does not
+prove that the control is enabled or effective in a deployed environment. Runtime evidence
+must be collected separately.
+
+| Threat | STRIDE categories | OWASP LLM mapping |
+|---|---|---|
+| Poisoned RAG document | Tampering, Elevation of Privilege | LLM01 Prompt Injection |
+| Direct jailbreak / prompt leakage | Spoofing, Information Disclosure | LLM01 Prompt Injection; LLM07 System Prompt Leakage |
+| PII exfiltration | Information Disclosure | LLM02 Sensitive Information Disclosure |
+| ChatOps infrastructure mutation | Spoofing, Tampering, Elevation of Privilege | LLM06 Excessive Agency |
+| Financial denial of service | Denial of Service | LLM10 Unbounded Consumption |
+| Dependency/MCP compromise | Tampering, Elevation of Privilege | LLM supply-chain risk (OWASP LLM Top 10) |
+| Slack replay / ingress abuse | Spoofing, Tampering, Denial of Service | Supporting control for LLM01/LLM06 |
+
+## Threat 1 — Indirect prompt injection via poisoned RAG document
 
 ### Description
 
-An attacker uploads or otherwise introduces a document whose text tells the model to
-ignore policy, reveal data, call tools, or alter its answer. Retrieval can place that text
-next to the user question, making it appear authoritative to a model.
+An uploaded document contains instructions intended for the model, such as requests to
+ignore policy, reveal other data, or claim actions were taken. Retrieved text is placed in
+the same model request as the user's question and may influence generation.
 
 ### Impact Level
 
@@ -27,32 +45,36 @@ next to the user question, making it appear authoritative to a model.
 
 ### Attack Vector
 
-The attacker submits a permitted `.txt`, `.md`, or `.pdf` document, waits for ingestion
-to mark it ready, then asks a query crafted to retrieve the malicious chunk. The included
-`security/sample-docs/poisoned-doc.md` is a non-production fixture for this scenario.
+An attacker with document-upload access submits a poisoned TXT, Markdown, or PDF, waits for
+ingestion to mark it ready, and asks a query likely to retrieve the malicious chunk. The
+fixture at `security/sample-docs/poisoned-doc.md` demonstrates a test payload; it is not
+evidence of a live attack or successful retrieval.
 
 ### Mitigation Strategy
 
-- `api/app/services/llm.py` wraps retrieved data in `<context>` and the question in
-  `<user_query>`.
-- The hardened system prompt states that context is untrusted data, never instructions,
-  and prohibits executing or disclosing instructions found in documents.
-- Document ingestion enforces file type, size, extraction, and chunking constraints; it
-  does not grant documents tool or infrastructure authority.
-- Promptfoo red-team configuration includes `indirect-prompt-injection` and
-  `rag-poisoning` probes. The poisoned fixture must be explicitly uploaded in a lab before
-  it can exercise retrieval.
+- `api/app/services/llm.py` separates retrieved text under `<context>` and the question
+  under `<user_query>`, escapes interpolated text, and tells the model the context is
+  untrusted data, not instructions. This is a prompt-layer mitigation, not a security
+  boundary by itself.
+- Upload validation and asynchronous ingestion bound file types/size and only retrieve
+  documents in `ready` state (`api/app/routers/documents.py`,
+  `api/app/services/retrieval.py`). They do not detect every malicious instruction.
+- `security/promptfooconfig.yaml` declares indirect-injection/RAG-poisoning probes. A test
+  requires explicitly ingesting the fixture and running the red-team evaluation; the
+  config alone is not a passing result.
+- No RAG text is granted tool execution authority by the API path. Keep upload access
+  restricted and treat all retrieved content as untrusted.
 
-Residual risk remains because natural-language instructions cannot be made safe solely by
-prompt text. Production deployments should restrict upload authorization and review
-untrusted corpus sources.
+Residual risk: there is no deterministic classifier that guarantees poisoned document
+content is harmless. Retrieved context is also included in the API response, so callers
+must have appropriate document access controls before using sensitive corpora.
 
 ## Threat 2 — Direct jailbreak and system-prompt leakage
 
 ### Description
 
-A user attempts to override model instructions directly, for example by asking it to
-ignore previous instructions, reveal its system prompt, or adopt a privileged role.
+A user crafts a question to override system instructions, extract hidden prompt text, or
+coerce the model into disclosing operational details.
 
 ### Impact Level
 
@@ -60,31 +82,30 @@ ignore previous instructions, reveal its system prompt, or adopt a privileged ro
 
 ### Attack Vector
 
-Requests reach `POST /chat` with zero-width or bidi control characters, Unicode variants,
-or known instruction-override phrases intended to evade simple matching and influence the
-provider model.
+An attacker calls `POST /chat` with direct jailbreak phrases, Unicode lookalikes, invisible
+characters, or multi-turn extraction attempts designed to bypass simple pattern matching.
 
 ### Mitigation Strategy
 
-- `api/app/services/security.py` normalizes input with NFKC, removes control/format
-  characters, normalizes whitespace, and rejects configured direct-jailbreak patterns.
-- The chat route sanitizes before embeddings, retrieval, and provider invocation.
-- The system prompt explicitly disallows revealing system prompts and credentials.
-- Optional `GUARDRAIL_PROVIDER=llama_guard` invokes an OpenAI-compatible Llama Guard
-  endpoint before the application provider; unavailable or non-`SAFE` verdicts fail
-  closed.
-- Promptfoo coverage includes `system-prompt-override`, `jailbreak`, and
-  `prompt-extraction`.
+- `api/app/core/guardrails.py` applies NFKC normalization, removes Unicode control/format
+  characters (while retaining ordinary newlines/tabs), rejects configured direct-injection
+  phrases, and checks input before retrieval/provider invocation.
+- `api/app/services/llm.py` instructs the model not to reveal system prompts or credentials.
+- An optional HTTP guardrail adapter is available through `GUARDRAIL_MODE=http` and
+  `GUARDRAIL_URL`; failures/non-allow decisions fail closed. The default is local mode, so
+  an external Bedrock/NeMo/Llama Guard service is **not** assumed to be deployed.
+- `security/promptfooconfig.yaml` contains jailbreak and prompt-extraction evaluations;
+  findings are not considered resolved until the evaluation is actually run and reviewed.
 
-The deterministic phrase list is intentionally not treated as a complete jailbreak
-detector; the external guardrail and regression testing are defense-in-depth controls.
+Residual risk: phrase matching and prompt wording cannot cover all jailbreaks. The optional
+external guardrail has no deployment evidence in this repository state.
 
 ## Threat 3 — PII and sensitive-data exfiltration in chat output
 
 ### Description
 
-Retrieved documents, provider responses, errors, or a compromised prompt can expose email
-addresses, phone numbers, payment numbers, tokens, or other sensitive text in a response.
+The model may repeat sensitive content present in retrieved chunks, expose another user's
+data, or return PII/credentials in its answer or context fields.
 
 ### Impact Level
 
@@ -92,31 +113,33 @@ addresses, phone numbers, payment numbers, tokens, or other sensitive text in a 
 
 ### Attack Vector
 
-An attacker asks for a private document, persuades the model to repeat context verbatim,
-or causes an upstream service to return a credential-shaped value. Data could then reach a
-browser or Slack response.
+A user asks for verbatim content, uses prompt injection to elicit sensitive fields, or
+retrieves a document containing personal data. A direct `/chat` response can include both
+`answer` and retrieved `contexts`.
 
 ### Mitigation Strategy
 
-- `api/app/services/security.py` redacts common email, telephone, payment-card, and
-  API-token-shaped values from generated output before it is returned.
-- Provider exceptions are translated to fixed `ServiceError` responses; provider bodies,
-  credentials, and raw tracebacks are not exposed to clients.
-- The RAG MCP service projects document IDs/status only and omits filename/content for its
-  read-only tool output.
-- ChatOps Block Kit rendering redacts token and secret-shaped text before posting Slack
-  messages.
-- Promptfoo coverage includes `pii:direct` and `pii:session`.
+- `api/app/core/guardrails.py` rejects generated answers matching a limited regex for
+  email addresses, SSN-shaped values, or payment-card-shaped digit strings. This is
+  implemented output screening, not comprehensive PII detection.
+- `api/app/services/llm.py` directs the model not to reveal PII or credentials; this is
+  defense in depth only.
+- The API maps provider failures to fixed service errors rather than returning raw provider
+  exceptions (`api/app/core/errors.py`, `api/app/core/providers.py`).
+- `security/promptfooconfig.yaml` includes direct/session PII probes, but the config does
+  not prove a clean evaluation.
 
-Regex redaction cannot classify all sensitive business content. Authorization, document
-classification, and provider-side retention controls remain required for production data.
+Residual risk is **high**: the regex does not identify arbitrary sensitive business data,
+does not reliably catch all token formats, and is applied to the generated answer—not the
+returned `contexts` list. Document authorization/classification, data minimization, and
+provider retention controls remain necessary before production use.
 
-## Threat 4 — Unauthorized infrastructure mutation through ChatOps
+## Threat 4 — Unauthorized infrastructure mutation via ChatOps Bot
 
 ### Description
 
-An attacker forges a Slack event, abuses an app mention, injects instructions into a bot
-conversation, or obtains a bot credential in order to mutate Kubernetes or cloud state.
+An unauthorized Slack user or compromised bot path attempts to change Kubernetes or other
+infrastructure, including by exploiting broad MCP capabilities or bypassing approval.
 
 ### Impact Level
 
@@ -124,33 +147,42 @@ conversation, or obtains a bot credential in order to mutate Kubernetes or cloud
 
 ### Attack Vector
 
-Requests target `POST /slack/events` with a replayed timestamp or forged signature. A
-valid user can also request destructive operations through natural language or try to make
-the bot invoke unbounded MCP tools.
+An attacker forges/replays Slack events, abuses an authorized user's identity, crafts a
+mutation request, or supplies arbitrary shell/tool arguments hoping the bot executes them.
 
 ### Mitigation Strategy
 
-- ChatOps verifies Slack HMAC-SHA256 over the raw body and timestamp; requests older than
-  300 seconds are rejected.
-- Slack events are acknowledged separately from background processing, limiting request
-  timeout/retry pressure.
-- The configured InsightHub MCP service enforces a read-only allowlist, fixed loopback
-  routes, bounded request sizes/timeouts, and does not expose shell, arbitrary URL, file,
-  document-content, or mutation tools.
-- Kubernetes RBAC manifests grant only `get`/`list` operations to the MCP service account.
-- Confirmation tokens are one-time and expire; audit records include timestamp, user,
-  tool, arguments, result summary, and approval state.
+- `chatops-bot/app/security.py` verifies Slack HMAC-SHA256 over the raw request body,
+  validates a five-minute timestamp window, and uses replay detection; ingress checks the
+  shared Redis replay claim before enqueueing (`chatops-bot/app/main.py`,
+  `chatops-bot/app/queue.py`).
+- Intent authorization is deterministic and default-deny by configured Slack user ID
+  (`chatops-bot/app/authorization.py`, `chatops-bot/app/config.py`). Unknown actions are
+  rejected; READ/DIAGNOSTIC/MUTATION tiers are explicit.
+- Current Slack handlers expose only health, ingestion, and pod-status read intents
+  (`chatops-bot/app/handlers.py`). Kubernetes MCP RBAC in
+  `deploy/helm/insighthub/templates/chatops.yaml` and `infra/k8s/chatops-rbac.yaml` grants
+  namespace-scoped `get`, `list`, and `watch` on pods/events/deployments, not write verbs,
+  Secret access, or cluster-admin.
+- `chatops-bot/app/mcp_client.py` invokes an operator-configured argv without a shell and
+  applies a short timeout. This does not establish trust in the configured executable.
+- `chatops-bot/app/approval.py` implements one-time approval records bound to requester,
+  action, argument hash, approver, and expiry, with self-approval denied by default.
+  However, the current Slack handler has no mutation intent/execution path; the approval
+  helper is not evidence that a live mutation workflow is deployed.
+- Structured audit helpers exist in `chatops-bot/app/audit.py`; verify live log collection
+  and retention separately.
 
-The current ChatOps implementation contains a read-only query boundary. Any future scale,
-restart, rollback, or cloud mutation must use a separate identity and an authorization
-workflow bound to the exact action.
+Residual risk: no mutation should be enabled until approval is wired to an allowlisted
+operation, a distinct least-privilege identity, atomic shared approval state for replicas,
+and runtime-tested audit. Never expose arbitrary `kubectl` or shell execution.
 
-## Threat 5 — Financial denial of service and API bill shock
+## Threat 5 — Financial denial of service (FDOS) / API bill shock
 
 ### Description
 
-Attackers or faulty workloads can trigger high token use, repeated provider retries, or
-expensive models, rapidly consuming a shared API budget.
+Abusive or runaway requests can consume provider tokens, exhaust quotas, and create
+unexpected LLM charges.
 
 ### Impact Level
 
@@ -158,31 +190,35 @@ expensive models, rapidly consuming a shared API budget.
 
 ### Attack Vector
 
-An exposed client loops long chat requests, submits oversized prompts, creates expensive
-ChatOps traffic, or uses an accidentally shared provider credential directly instead of a
-scoped gateway key.
+A client loops `/chat` requests, submits maximum-length questions, repeatedly triggers
+expensive model routes/retries, or obtains a shared upstream credential instead of a
+scoped virtual key.
 
 ### Mitigation Strategy
 
-- API request models bound question length, `top_k`, and provider max tokens through
-  validated settings.
-- LiteLLM configuration defines separate virtual-key aliases for application, ChatOps, and
-  coding workflows. The bootstrap applies per-key `max_budget` and `budget_duration`.
-- LiteLLM uses PostgreSQL for spend/budget enforcement and configures retry/cooldown plus
-  a chat fallback model group.
-- The Grafana FinOps panels query LiteLLM spend/token/cache metrics by `api_key_alias` to
-  detect unexpected burn rates.
+- Chat request validation caps question length at 2,000 characters, `top_k` at 20, and
+  configured generation tokens (`api/app/routers/chat.py`,
+  `api/app/core/config.py`). These limits do not replace request rate limiting.
+- Optional LiteLLM configuration defines PostgreSQL-backed key budgets and retry/cooldown
+  behavior (`security/litellm-config.yaml`). `security/bootstrap_litellm_keys.py` defines
+  separate aliases and budgets for InsightHub, ChatOps, and Coding.
+- API/worker configuration can use scoped LiteLLM virtual keys, while upstream provider
+  keys remain at the gateway (`docker-compose.yml`). Actual enforcement requires LiteLLM
+  to be running, keys to be bootstrapped, and clients to use those keys; repository
+  configuration alone does not prove this runtime state.
+- The provisioned Grafana Day 4 dashboard includes LiteLLM spend/token panels by virtual
+  key (`observability/grafana-dashboards/insighthub-day4.json`) when the proxy metrics are
+  scraped. Monitoring detects burn; it does not itself cap spend.
 
-Budgets are enforceable only when LiteLLM is running with its PostgreSQL database and the
-application uses a scoped virtual key. Upstream provider budgets are an additional
-necessary control.
+Residual risk: direct provider credentials, missing rate limits, and provider-side spend
+caps remain important controls. Do not treat dashboard alerts as budget enforcement.
 
-## Threat 6 — Dependency supply-chain or unpinned MCP server compromise
+## Threat 6 — Dependency supply chain / unpinned MCP server compromise
 
 ### Description
 
-A malicious or changed package, container image, MCP server, or transitive dependency can
-gain access to prompts, credentials, local network services, or tool execution.
+A compromised or unexpectedly changed dependency, container image, or MCP executable can
+read prompts/secrets, access internal services, or return malicious tool output.
 
 ### Impact Level
 
@@ -190,30 +226,35 @@ gain access to prompts, credentials, local network services, or tool execution.
 
 ### Attack Vector
 
-An operator runs `latest`, `npx` without a lockfile, an unreviewed MCP command, a mutable
-container tag, or grants a vendor MCP server broad kubeconfig/Docker permissions.
+An attacker compromises an upstream package/image, exploits an unpinned update, or tricks
+an operator into configuring a malicious MCP command with broad process or Kubernetes
+access.
 
 ### Mitigation Strategy
 
-- Python requirements and the MCP Node package lock pin dependencies; project Docker
-  images use pinned base images/digests where supplied.
-- The local MCP server has a strict tool allowlist and rejects arbitrary shell, URL, and
-  document-content access even if a client tries direct tool calls.
-- Kubernetes MCP RBAC uses a dedicated service account with read-only `get`/`list` verbs;
-  it does not grant cluster-admin or Secret access.
-- LiteLLM is configured as a separately pinned image profile. Operators must review the
-  pinned release before upgrade and retain a lock/evidence trail.
+- Python and Node dependency manifests/lockfiles pin dependency versions; the MCP package
+  lockfile is `tools/mcp/package-lock.json`. Locked dependencies reduce drift but do not
+  prove packages are vulnerability-free or provenance-verified.
+- The built-in MCP server (`tools/mcp/src/server.mjs`, `tools/mcp/src/core.mjs`) registers
+  a bounded tool allowlist and validates input/output; it does not expose arbitrary shell
+  or URL access.
+- ChatOps launches a configured JSON argv without shell interpolation and bounds MCP call
+  time (`chatops-bot/app/config.py`, `chatops-bot/app/mcp_client.py`). The operator-supplied
+  command itself is not pinned or authenticated by the client.
+- Kubernetes permissions are namespace-scoped read-only RBAC as described in Threat 4.
+- Some infrastructure images use immutable digests; LiteLLM and several development
+  service images use version tags rather than digests. Image provenance/signature
+  verification is not implemented here.
 
-Image tags without an immutable digest and externally configured MCP commands remain
-operator trust assumptions. They should be verified against a reviewed digest and least
-privilege policy before production use.
+Residual risk: review MCP command ownership, executable path, package provenance, image
+digest/signature, and vulnerability scan results before production deployment.
 
-## Threat 7 — Replay, tampering, and availability abuse at public ingress
+## Threat 7 — Slack replay, tampering, and ingress denial of service
 
 ### Description
 
-Unauthenticated or malformed uploads and Slack events can consume resources, while replay
-or tampering can cause duplicated or unauthorized work.
+Forged, modified, stale, duplicated, or malformed requests can trigger unauthorized or
+repeated processing, or consume ingress/queue resources.
 
 ### Impact Level
 
@@ -221,22 +262,26 @@ or tampering can cause duplicated or unauthorized work.
 
 ### Attack Vector
 
-Attackers resend Slack payloads, submit malformed JSON, oversized uploads, or repeatedly
-trigger ingestion jobs.
+An attacker resends a captured Slack payload, modifies body bytes, omits signing headers,
+or floods the endpoint with malformed requests.
 
 ### Mitigation Strategy
 
-- Slack signature verification uses constant-time comparison and a five-minute replay
-  window before JSON parsing.
-- Upload middleware enforces a bounded file size; ingestion uses document status,
-  transactions, and identity/conflict checks to prevent duplicate chunk writes.
-- Redis/ARQ separates document processing from the request path and maintains retry
-  behavior rather than running unbounded in-process background work.
-- API error handlers preserve fixed public error messages and bounded metrics labels.
+- ChatOps verifies the signature against the raw body before parsing the request and uses
+  constant-time HMAC comparison (`chatops-bot/app/security.py`,
+  `chatops-bot/app/main.py`). Stale timestamps and replay fingerprints are rejected.
+- Authenticated events are deduplicated/enqueued through Redis/ARQ before the HTTP ACK;
+  processing happens in the worker (`chatops-bot/app/queue.py`, `chatops-bot/worker.py`).
+- API upload/request validation bounds payload size and shape. These controls do not equal
+  an edge WAF or per-source rate limit.
 
-## Review cadence
+Residual risk: verify ingress rate limiting, Redis availability/retention, and multi-replica
+behavior in the target deployment. Do not infer an ACK latency SLO from unit tests alone.
 
-Review this model after a new provider, MCP server, document source, Slack capability,
-LiteLLM model/key, or cloud deployment is introduced. Red-team findings must result in a
-test, a mitigation decision, and a retest against the same dataset before being marked
-resolved.
+## Review and evidence
+
+Reassess this model when a provider, document source, MCP tool, Slack capability, model/key,
+or deployment environment changes. For every mitigation marked configurable, gather
+runtime evidence (effective settings, RBAC `can-i`, provider budget/key state, live MCP
+calls, log retention, or red-team reports) before representing it as deployed. Track each
+accepted residual risk with an owner and review date.

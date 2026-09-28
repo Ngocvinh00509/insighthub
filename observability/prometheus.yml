@@ -7,3 +7,9 @@ scrape_configs:
     metrics_path: /metrics
     static_configs:
       - targets: [api:8000]
+  # LiteLLM is optional and runs only with the `litellm` Compose profile.
+  # The metrics port stays on the private Compose network; it is not published.
+  - job_name: litellm-proxy
+    metrics_path: /metrics
+    static_configs:
+      - targets: [litellm:4000]
