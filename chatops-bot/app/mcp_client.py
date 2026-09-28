@@ -27,19 +27,21 @@ class McpClient:
         self._server = server
 
     async def call_tool(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
-        process = await asyncio.create_subprocess_exec(
-            *self._server.command,
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.DEVNULL,
-            env={**os.environ, **self._server.environment},
-        )
+        process: asyncio.subprocess.Process | None = None
         try:
-            await self._send(process, 1, "initialize", {"protocolVersion": "2025-11-25", "capabilities": {}, "clientInfo": {"name": "insighthub-chatops", "version": "1.0"}})
-            await self._receive(process, 1)
-            await self._notify(process, "notifications/initialized", {})
-            await self._send(process, 2, "tools/call", {"name": name, "arguments": arguments})
-            response = await self._receive(process, 2)
+            async with asyncio.timeout(MCP_TIMEOUT_SECONDS):
+                process = await asyncio.create_subprocess_exec(
+                    *self._server.command,
+                    stdin=asyncio.subprocess.PIPE,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.DEVNULL,
+                    env={**os.environ, **self._server.environment},
+                )
+                await self._send(process, 1, "initialize", {"protocolVersion": "2025-11-25", "capabilities": {}, "clientInfo": {"name": "insighthub-chatops", "version": "1.0"}})
+                await self._receive(process, 1)
+                await self._notify(process, "notifications/initialized", {})
+                await self._send(process, 2, "tools/call", {"name": name, "arguments": arguments})
+                response = await self._receive(process, 2)
             result = response.get("result")
             if not isinstance(result, dict) or result.get("isError"):
                 raise McpError("MCP_UNAVAILABLE")
@@ -55,9 +57,13 @@ class McpClient:
         except (asyncio.TimeoutError, json.JSONDecodeError, OSError) as exc:
             raise McpError("MCP_UNAVAILABLE") from exc
         finally:
-            if process.returncode is None:
+            if process is not None and process.returncode is None:
                 process.terminate()
-                await process.wait()
+                try:
+                    await asyncio.wait_for(process.wait(), timeout=1)
+                except asyncio.TimeoutError:
+                    process.kill()
+                    await process.wait()
 
     async def _send(self, process: asyncio.subprocess.Process, request_id: int, method: str, params: dict[str, Any]) -> None:
         assert process.stdin is not None

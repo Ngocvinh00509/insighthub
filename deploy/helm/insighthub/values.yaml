@@ -34,3 +34,16 @@ externalSecrets:
   # an in-namespace Secret while a pod mounts the CSI volume.
   keys: [DATABASE_URL, REDIS_URL, OPENAI_API_KEY]
 serviceAccounts: { apiRoleArn: "", workerRoleArn: "" }
+chatops:
+  enabled: false
+  image: { repository: insighthub-chatops, tag: dev, pullPolicy: IfNotPresent }
+  replicas: 1
+  existingSecret: ""
+  queue: insighthub:chatops
+  namespace: insighthub-dev
+  readUsers: ""
+  diagnosticUsers: ""
+  mutationUsers: ""
+  approverUsers: ""
+  allowSelfApproval: "0"
+  resources: { requests: { cpu: 100m, memory: 128Mi }, limits: { cpu: 500m, memory: 256Mi } }
