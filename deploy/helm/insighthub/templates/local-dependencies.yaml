@@ -1,0 +1,37 @@
+{{- if .Values.local.enabled }}
+apiVersion: v1
+kind: Service
+metadata: { name: postgres }
+spec: { selector: { app: postgres }, ports: [{ port: 5432 }] }
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata: { name: postgres }
+spec:
+  serviceName: postgres
+  selector: { matchLabels: { app: postgres } }
+  template:
+    metadata: { labels: { app: postgres } }
+    spec:
+      containers:
+        - name: postgres
+          image: pgvector/pgvector:0.8.2-pg16@sha256:00ba258a66dac104fd5171074a0084462a64a1369d8513f3d0a634e2f24d15bc
+          env: [{ name: POSTGRES_USER, value: insighthub }, { name: POSTGRES_PASSWORD, value: insighthub }, { name: POSTGRES_DB, value: insighthub }]
+          ports: [{ containerPort: 5432 }]
+---
+apiVersion: v1
+kind: Service
+metadata: { name: redis }
+spec: { selector: { app: redis }, ports: [{ port: 6379 }] }
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata: { name: redis }
+spec:
+  serviceName: redis
+  selector: { matchLabels: { app: redis } }
+  template:
+    metadata: { labels: { app: redis } }
+    spec:
+      containers: [{ name: redis, image: redis:7-alpine, args: ["redis-server", "--appendonly", "yes"], ports: [{ containerPort: 6379 }] }]
+{{- end }}
