@@ -1,14 +1,3 @@
-locals {
-  standard_tags = {
-    project     = "insighthub"
-    environment = var.environment
-    owner       = var.owner
-    cost_center = var.cost_center
-    managed_by  = "terraform"
-    lab_expiry  = var.lab_expiry
-  }
-}
-
 data "terraform_remote_state" "core" {
   backend = "s3"
   config = {

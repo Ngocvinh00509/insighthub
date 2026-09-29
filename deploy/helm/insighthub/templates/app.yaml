@@ -1,10 +1,8 @@
 {{- $labels := include "insighthub.labels" . }}
-{{- $useExternalSecrets := .Values.externalSecrets.enabled }}
-{{- $useExistingSecret := and (not $useExternalSecrets) (ne .Values.existingSecret.name "") }}
 {{- range $component := list "web" "api" "worker" }}
 {{- $image := index $.Values.images $component }}
 {{- $port := ternary 3000 8000 (eq $component "web") }}
-{{- $bootstrapApiServiceAccount := and (eq $component "api") (or $useExternalSecrets $useExistingSecret) $.Values.database.bootstrap.enabled }}
+{{- $bootstrapApiServiceAccount := and (eq $component "api") $.Values.externalSecrets.enabled $.Values.database.bootstrap.enabled }}
 {{- if not $bootstrapApiServiceAccount }}
 apiVersion: v1
 kind: ServiceAccount
@@ -34,34 +32,41 @@ spec:
         - name: {{ $component }}
           image: {{ $image.repository }}:{{ $image.tag }}
           imagePullPolicy: {{ $image.pullPolicy }}
-          ports: [{ containerPort: {{ $port }} }]
+          ports:
+            - { name: http, containerPort: {{ $port }} }
+            {{- if eq $component "worker" }}
+            - { name: http-metrics, containerPort: {{ $.Values.observability.workerMetricsPort }} }
+            {{- end }}
           securityContext: { allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: ["ALL"] } }
           resources: {{- toYaml $.Values.resources | nindent 12 }}
           env:
             - { name: RAG_MODE, value: {{ $.Values.global.ragMode | quote }} }
             - { name: LLM_PROVIDER, value: {{ $.Values.providers.llm | quote }} }
             - { name: EMBEDDING_PROVIDER, value: {{ $.Values.providers.embedding | quote }} }
-          {{- if $useExternalSecrets }}
+            {{- if eq $component "worker" }}
+            - { name: WORKER_METRICS_PORT, value: {{ $.Values.observability.workerMetricsPort | quote }} }
+            {{- end }}
+          {{- if $.Values.externalSecrets.enabled }}
           envFrom:
             - secretRef: { name: {{ $.Values.externalSecrets.secretName }} }
-          {{- else if $useExistingSecret }}
-          envFrom:
-            - secretRef: { name: {{ $.Values.existingSecret.name }} }
           {{- else }}
             - { name: DATABASE_URL, value: {{ $.Values.database.url | quote }} }
             - { name: REDIS_URL, value: {{ $.Values.redis.url | quote }} }
           {{- end }}
-          {{- if $useExternalSecrets }}
+          {{- if $.Values.externalSecrets.enabled }}
           volumeMounts:
             - name: application-secrets
               mountPath: /mnt/secrets-store
               readOnly: true
           {{- end }}
-          {{- if ne $component "worker" }}
+          {{- if eq $component "worker" }}
+          livenessProbe: { tcpSocket: { port: http-metrics }, initialDelaySeconds: 15 }
+          readinessProbe: { tcpSocket: { port: http-metrics }, initialDelaySeconds: 15 }
+          {{- else }}
           livenessProbe: { httpGet: { path: {{ ternary "/api/health" "/healthz" (eq $component "web") }}, port: {{ $port }} }, initialDelaySeconds: 10 }
           readinessProbe: { httpGet: { path: {{ ternary "/api/health" "/readyz" (eq $component "web") }}, port: {{ $port }} }, initialDelaySeconds: 10 }
           {{- end }}
-      {{- if $useExternalSecrets }}
+      {{- if $.Values.externalSecrets.enabled }}
       volumes:
         - name: application-secrets
           csi:
@@ -71,12 +76,19 @@ spec:
               secretProviderClass: {{ $.Values.externalSecrets.secretProviderClass }}
       {{- end }}
 ---
-{{- if ne $component "worker" }}
 apiVersion: v1
 kind: Service
-metadata: { name: insighthub-{{ $component }} }
-spec: { selector: { app.kubernetes.io/name: insighthub, app.kubernetes.io/component: {{ $component }} }, ports: [{ port: {{ $port }}, targetPort: {{ $port }} }] }
+metadata:
+  name: insighthub-{{ $component }}
+  labels: { {{ $labels | replace "\n" ", " }}, app.kubernetes.io/component: {{ $component }} }
+spec:
+  selector: { app.kubernetes.io/name: insighthub, app.kubernetes.io/component: {{ $component }} }
+  ports:
+    - name: http-metrics
+      port: {{ ternary $.Values.observability.workerMetricsPort $port (eq $component "worker") }}
+      targetPort: {{ ternary "http-metrics" "http" (eq $component "worker") }}
 ---
+{{- if ne $component "worker" }}
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata: { name: insighthub-{{ $component }} }

@@ -4,6 +4,10 @@ export const TOOL_NAMES = Object.freeze(['insighthub_health', 'insighthub_list_d
 export const QUERIES = Object.freeze({
   requests_5m: 'sum(increase(insighthub_http_requests_total[5m]))',
   errors_5m: 'sum(increase(insighthub_http_requests_total{status=~"5.."}[5m]))',
+  // A fixed rolling-day capability.  The caller cannot submit arbitrary PromQL;
+  // the response makes the 24-hour window explicit rather than claiming it is a
+  // calendar-day value.
+  ingestion_jobs_24h: 'sum(increase(insighthub_ingestion_jobs_total{outcome="success"}[24h]))',
   documents: 'sum(insighthub_documents_total)',
 });
 export class SafeError extends Error {
@@ -156,7 +160,7 @@ export function createService(config) {
         if (!Number.isFinite(value) || value < 0) fail('UPSTREAM_SCHEMA');
       }
       // Drop all upstream labels, annotations, warnings and timestamps.
-      return result({ query: args.query, value, window: args.query === 'documents' ? 'instant' : '5m' });
+      return result({ query: args.query, value, window: args.query === 'documents' ? 'instant' : args.query === 'ingestion_jobs_24h' ? '24h' : '5m' });
     } finally { active--; }
   };
 }

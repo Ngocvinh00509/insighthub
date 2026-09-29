@@ -1,0 +1,206 @@
+{
+  "__inputs": [
+    {
+      "name": "DS_PROMETHEUS",
+      "label": "Prometheus",
+      "type": "datasource",
+      "pluginId": "prometheus",
+      "pluginName": "Prometheus"
+    }
+  ],
+  "annotations": {
+    "list": [
+      {
+        "name": "Deployments",
+        "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+        "enable": true,
+        "iconColor": "#5794F2",
+        "target": {
+          "expr": "changes(kube_deployment_status_observed_generation{namespace=\"$namespace\",deployment=~\"insighthub-.*\"}[5m]) > 0",
+          "refId": "Deployments"
+        },
+        "titleFormat": "InsightHub deployment",
+        "textFormat": "Deployment generation changed"
+      }
+    ]
+  },
+  "description": "Day 4 RED, ingestion queue, PostgreSQL and Kubernetes resource telemetry. All panels query emitted Prometheus metrics; an empty panel means the corresponding target has not produced data.",
+  "editable": true,
+  "panels": [
+    {
+      "id": 1,
+      "title": "API request rate",
+      "description": "Incoming API requests per second, grouped by stable route template.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 0 },
+      "targets": [{ "expr": "sum by (endpoint) (rate(insighthub_http_requests_total{namespace=\"$namespace\"}[5m]))", "legendFormat": "{{endpoint}}", "refId": "A" }],
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } }
+    },
+    {
+      "id": 2,
+      "title": "API 5xx error rate",
+      "description": "Fraction of API requests that returned HTTP 5xx; use with API latency and provider signals for RCA.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 0 },
+      "targets": [{ "expr": "sum(rate(insighthub_http_requests_total{namespace=\"$namespace\",status=~\"5..\"}[5m])) / clamp_min(sum(rate(insighthub_http_requests_total{namespace=\"$namespace\"}[5m])), 1)", "legendFormat": "API 5xx ratio", "refId": "A" }],
+      "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1, "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 0.05 }] } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "single", "sort": "none" } }
+    },
+    {
+      "id": 3,
+      "title": "API latency p95",
+      "description": "95th-percentile duration for all API route-template requests.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 0 },
+      "targets": [{ "expr": "histogram_quantile(0.95, sum by (le) (rate(insighthub_http_request_duration_seconds_bucket{namespace=\"$namespace\"}[5m])))", "legendFormat": "API p95", "refId": "A" }],
+      "fieldConfig": { "defaults": { "unit": "s", "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "orange", "value": 2 }, { "color": "red", "value": 5 }] } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "single", "sort": "none" } }
+    },
+    {
+      "id": 4,
+      "title": "Ingestion job rate",
+      "description": "Worker ingestion attempts per second by actual success, failure, retry, or rejected outcome.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 8 },
+      "targets": [{ "expr": "sum by (outcome) (rate(insighthub_ingestion_jobs_total{namespace=\"$namespace\"}[5m]))", "legendFormat": "{{outcome}}", "refId": "A" }],
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } }
+    },
+    {
+      "id": 5,
+      "title": "Ingestion processing duration p95",
+      "description": "95th-percentile duration of an actual ingestion worker attempt, including extract, chunk, embed and store work.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 8 },
+      "targets": [{ "expr": "histogram_quantile(0.95, sum by (le) (rate(insighthub_ingestion_job_duration_seconds_bucket{namespace=\"$namespace\"}[5m])))", "legendFormat": "worker p95", "refId": "A" }],
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "single", "sort": "none" } }
+    },
+    {
+      "id": 6,
+      "title": "Ingestion failures and retries",
+      "description": "Rate of terminal worker failures and retry deferrals. Rising retries with stable completion rate suggests an upstream dependency issue.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 8 },
+      "targets": [
+        { "expr": "sum(rate(insighthub_ingestion_jobs_total{namespace=\"$namespace\",outcome=\"failed\"}[5m]))", "legendFormat": "failed attempts/s", "refId": "A" },
+        { "expr": "sum(rate(insighthub_ingestion_retries_total{namespace=\"$namespace\"}[5m]))", "legendFormat": "retry deferrals/s", "refId": "B" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } }
+    },
+    {
+      "id": 7,
+      "title": "Redis ingestion queue backlog",
+      "description": "Actual ARQ sorted-set queue depth and oldest pending job age from the read-only queue exporter.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "targets": [
+        { "expr": "max(insighthub_queue_depth{namespace=\"$namespace\"})", "legendFormat": "pending jobs", "refId": "A" },
+        { "expr": "max(insighthub_queue_oldest_job_age_seconds{namespace=\"$namespace\"})", "legendFormat": "oldest job age", "refId": "B" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [{ "matcher": { "id": "byRefId", "options": "B" }, "properties": [{ "id": "unit", "value": "s" }] }] },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } }
+    },
+    {
+      "id": 8,
+      "title": "PostgreSQL health and connections",
+      "description": "Exporter reachability plus active PostgreSQL backend connections for non-template databases.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "targets": [
+        { "expr": "min(pg_up{namespace=\"$namespace\"})", "legendFormat": "pg_up", "refId": "A" },
+        { "expr": "sum(pg_stat_database_numbackends{namespace=\"$namespace\",datname!~\"template0|template1\"})", "legendFormat": "active connections", "refId": "B" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } }
+    },
+    {
+      "id": 9,
+      "title": "InsightHub pod CPU",
+      "description": "CPU cores consumed by each InsightHub workload container.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 24 },
+      "targets": [{ "expr": "sum by (pod, container) (rate(container_cpu_usage_seconds_total{namespace=\"$namespace\",container!=\"\",pod=~\"insighthub-.*\"}[5m]))", "legendFormat": "{{pod}} / {{container}}", "refId": "A" }],
+      "fieldConfig": { "defaults": { "unit": "cores", "min": 0 }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } }
+    },
+    {
+      "id": 10,
+      "title": "InsightHub pod memory",
+      "description": "Working-set memory of each InsightHub workload container.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 24 },
+      "targets": [{ "expr": "sum by (pod, container) (container_memory_working_set_bytes{namespace=\"$namespace\",container!=\"\",pod=~\"insighthub-.*\"})", "legendFormat": "{{pod}} / {{container}}", "refId": "A" }],
+      "fieldConfig": { "defaults": { "unit": "bytes", "min": 0 }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } }
+    },
+    {
+      "id": 11,
+      "title": "InsightHub pod restart count",
+      "description": "Container restarts in the selected time range; correlate with queue growth and API errors.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 24 },
+      "targets": [{ "expr": "sum by (pod, container) (increase(kube_pod_container_status_restarts_total{namespace=\"$namespace\",pod=~\"insighthub-.*\"}[$__range]))", "legendFormat": "{{pod}} / {{container}}", "refId": "A" }],
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } }
+    },
+    {
+      "id": 12,
+      "title": "LLM token usage",
+      "description": "Provider-reported LLM token throughput. This panel remains empty when the provider does not report usage; it does not estimate a billing value.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 32 },
+      "targets": [{ "expr": "sum by (provider, direction) (rate(insighthub_llm_tokens_total{namespace=\"$namespace\"}[5m])) * 60", "legendFormat": "{{provider}} / {{direction}}", "refId": "A" }],
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } }
+    },
+    {
+      "id": 13,
+      "title": "LLM cost rate when LiteLLM billing telemetry is enabled",
+      "description": "Uses LiteLLM spend telemetry only when the optional gateway exports it. No cost is inferred from token counts when this series is absent.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 32 },
+      "targets": [{ "expr": "sum(rate(litellm_spend_metric_total{namespace=\"$namespace\"}[5m])) by (api_key_alias)", "legendFormat": "{{api_key_alias}} USD/s", "refId": "A" }],
+      "fieldConfig": { "defaults": { "unit": "currencyUSD" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } }
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "tags": ["insighthub", "day4", "red", "use", "ingestion"],
+  "templating": {
+    "list": [
+      {
+        "name": "namespace",
+        "label": "Namespace",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+        "definition": "label_values(kube_pod_info, namespace)",
+        "query": { "query": "label_values(kube_pod_info, namespace)", "refId": "NamespaceVariableQuery" },
+        "current": { "selected": true, "text": "insighthub-dev", "value": "insighthub-dev" },
+        "includeAll": false,
+        "multi": false,
+        "refresh": 1
+      }
+    ]
+  },
+  "time": { "from": "now-6h", "to": "now" },
+  "title": "InsightHub Day 4 - RED, Ingestion and USE",
+  "uid": "insighthub-day4",
+  "version": 1
+}

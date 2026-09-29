@@ -3,11 +3,11 @@ from __future__ import annotations
 
 import json
 
-from fastapi import BackgroundTasks, FastAPI, HTTPException, Request, status
+from fastapi import FastAPI, HTTPException, Request, status
 
 from .config import get_settings
-from .handlers import handle_slack_event
-from .security import SlackVerificationError, verify_slack_signature
+from .queue import ChatOpsQueueUnavailable, claim_shared_slack_replay, enqueue_slack_event
+from .security import SlackVerificationError, slack_request_fingerprint, verify_slack_signature
 
 app = FastAPI(title="InsightHub ChatOps", version="0.3.0")
 
@@ -18,7 +18,7 @@ def health() -> dict[str, str]:
 
 
 @app.post("/slack/events", status_code=status.HTTP_200_OK)
-async def slack_events(request: Request, background_tasks: BackgroundTasks) -> dict[str, str]:
+async def slack_events(request: Request) -> dict[str, str]:
     """Authenticate exact request bytes before inspecting the Slack payload."""
     raw_body = await request.body()
     settings = get_settings()
@@ -32,6 +32,18 @@ async def slack_events(request: Request, background_tasks: BackgroundTasks) -> d
     except SlackVerificationError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
     try:
+        replay_claimed = await claim_shared_slack_replay(
+            slack_request_fingerprint(
+                request.headers["X-Slack-Request-Timestamp"],
+                request.headers["X-Slack-Signature"],
+                raw_body,
+            )
+        )
+    except ChatOpsQueueUnavailable as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="chatops_replay_store_unavailable") from exc
+    if not replay_claimed:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="replayed_slack_request")
+    try:
         payload = json.loads(raw_body)
     except (TypeError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="invalid_payload") from exc
@@ -42,6 +54,13 @@ async def slack_events(request: Request, background_tasks: BackgroundTasks) -> d
         if not isinstance(challenge, str):
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="invalid_challenge")
         return {"challenge": challenge}
-    # Slack receives its ACK before any potentially slow LLM/MCP work.
-    background_tasks.add_task(handle_slack_event, payload)
+    event_id = payload.get("event_id")
+    if not isinstance(event_id, str) or not event_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="invalid_event_id")
+    try:
+        await enqueue_slack_event(event_id, payload)
+    except ChatOpsQueueUnavailable as exc:
+        # Do not ACK work that Redis did not accept durably; Slack can retry.
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="chatops_queue_unavailable") from exc
+    # ACK only after Redis accepted the stable event-id job. MCP work runs in worker.py.
     return {"ok": "true"}

@@ -1,0 +1,18 @@
+# Disposable-lab test only. Delete immediately after verifying Slack delivery.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: insighthub-alert-pipeline-test
+  namespace: monitoring
+  labels: { release: kube-prometheus-stack, app.kubernetes.io/part-of: insighthub }
+spec:
+  groups:
+    - name: insighthub.alert-pipeline-test
+      rules:
+        - alert: InsightHubAlertPipelineTest
+          expr: vector(1)
+          for: 1m
+          labels: { severity: info, service: observability, team: insighthub }
+          annotations:
+            summary: "InsightHub lab alert pipeline test"
+            description: "Manual Day 4 test only; delete this rule after Slack delivery is verified."

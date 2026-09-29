@@ -65,7 +65,8 @@ test('Prometheus allows only fixed aggregate queries and drops labels', async t 
   }
   for (const args of [{query:'up'}, {query:'documents', start:0}, {query:'__proto__'}, {query:'requests_5m',url:f.url}])
     await assert.rejects(call('prometheus_summary',args),/INVALID_ARGUMENTS/);
-  assert.equal(f.requests.length,3);
+  assert.equal(QUERIES.ingestion_jobs_24h, 'sum(increase(insighthub_ingestion_jobs_total{outcome="success"}[24h]))');
+  assert.equal(f.requests.length,Object.keys(QUERIES).length);
 });
 for (const [label, handler, expected] of [
   ['redirect', (req,res) => {res.writeHead(302,{Location:'http://169.254.169.254/latest/meta-data/'});res.end(CANARY);}, 'UPSTREAM_HTTP_ERROR'],

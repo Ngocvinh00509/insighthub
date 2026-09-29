@@ -6,10 +6,10 @@ Do not replace a pin with `latest`.
 
 | Tool | Pin | Integrity evidence |
 |---|---:|---|
-| Terraform | `1.15.9` (accepted by source constraint `>= 1.10.0, < 1.16.0`) | Operator must verify the official distribution checksum before installation. |
+| Terraform | `1.15.9` (accepted by source constraint `>= 1.10.0, < 1.16.0`) | Verify the platform archive against HashiCorp's published SHA256SUMS before installation. |
 | AWS provider | `5.100.0` | `.terraform.lock.hcl` (`h1` and `zh` checksums) |
 | Kubernetes provider | `2.38.0` | `.terraform.lock.hcl` (`h1` and `zh` checksums) |
 | TLS provider | `4.4.1` | `.terraform.lock.hcl` (`h1` and `zh` checksums) |
-| TFLint | `0.64.0` | CI must verify the release checksum before invocation. |
-| Checkov | `3.3.18` | Installed local version; CI must verify the official release/package checksum before invocation. |
-| Conftest | `0.70.1` | Verify the GitHub release attestation for tag `v0.70.1` and the upstream `release.yaml` workflow before use. |
+| TFLint | `0.64.0` | Release `checksums.txt`: `sha256:07496dc0ab06a39fa718a9f8e471112b6e6ab4fd3a9f1024210a55fe3f1a9ff9`; verify the platform archive against that manifest. |
+| Checkov | `3.3.18` | PyPI wheel `checkov-3.3.18-py3-none-any.whl`: `sha256:65d746d47725bb843917dd513d8ad0519edfa50201a620c4032cd234b2985f63`. |
+| Conftest | `0.70.1` | Windows x86_64 archive: `sha256:f88f02c67975dc0b77dd64b782a07dc1833eb4071170a65b5336fcb0e0dcfb1d`; verify GitHub release attestation for tag `v0.70.1` and upstream `release.yaml`. |

@@ -25,6 +25,36 @@ variable "lab_expiry" {
   description = "RFC3339 stop time recorded for human teardown; tags do not automatically delete resources."
 }
 
+variable "terraform_state_bucket" {
+  type        = string
+  description = "Name of the reviewed S3 state bucket created by the bootstrap root."
+
+  validation {
+    condition     = can(regex("^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$", var.terraform_state_bucket))
+    error_message = "terraform_state_bucket must be a valid lowercase S3 bucket name."
+  }
+}
+
+variable "core_state_key" {
+  type        = string
+  description = "Exact S3 object key for this root's Terraform state."
+
+  validation {
+    condition     = startswith(var.core_state_key, "insighthub/") && !strcontains(var.core_state_key, "*")
+    error_message = "core_state_key must be an exact InsightHub key without wildcards."
+  }
+}
+
+variable "platform_state_key" {
+  type        = string
+  description = "Exact S3 object key used by the platform root."
+
+  validation {
+    condition     = startswith(var.platform_state_key, "insighthub/") && !strcontains(var.platform_state_key, "*")
+    error_message = "platform_state_key must be an exact InsightHub key without wildcards."
+  }
+}
+
 variable "github_plan_subject" {
   type        = string
   description = "Exact GitHub OIDC sub claim for the reviewed plan workflow; wildcard subjects are forbidden."

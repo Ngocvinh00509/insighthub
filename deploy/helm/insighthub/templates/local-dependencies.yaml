@@ -13,11 +13,19 @@ spec:
   template:
     metadata: { labels: { app: postgres } }
     spec:
+      securityContext: { seccompProfile: { type: RuntimeDefault } }
       containers:
         - name: postgres
           image: pgvector/pgvector:0.8.2-pg16@sha256:00ba258a66dac104fd5171074a0084462a64a1369d8513f3d0a634e2f24d15bc
           env: [{ name: POSTGRES_USER, value: insighthub }, { name: POSTGRES_PASSWORD, value: insighthub }, { name: POSTGRES_DB, value: insighthub }]
           ports: [{ containerPort: 5432 }]
+          readinessProbe: { exec: { command: ["pg_isready", "-U", "insighthub", "-d", "insighthub"] }, initialDelaySeconds: 5, periodSeconds: 5 }
+          livenessProbe: { exec: { command: ["pg_isready", "-U", "insighthub", "-d", "insighthub"] }, initialDelaySeconds: 15, periodSeconds: 10 }
+          volumeMounts:
+            - { name: schema, mountPath: /docker-entrypoint-initdb.d, readOnly: true }
+      volumes:
+        - name: schema
+          configMap: { name: {{ include "insighthub.name" . }}-database-schema }
 ---
 apiVersion: v1
 kind: Service
@@ -33,5 +41,6 @@ spec:
   template:
     metadata: { labels: { app: redis } }
     spec:
+      securityContext: { runAsUser: 999, runAsGroup: 999, runAsNonRoot: true, seccompProfile: { type: RuntimeDefault } }
       containers: [{ name: redis, image: redis:7-alpine, args: ["redis-server", "--appendonly", "yes"], ports: [{ containerPort: 6379 }] }]
 {{- end }}

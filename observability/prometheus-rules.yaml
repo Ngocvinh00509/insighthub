@@ -1,82 +1,86 @@
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
 metadata:
-  name: insighthub-anomaly-rules
+  name: insighthub-day4-alerts
   namespace: monitoring
-  labels:
-    release: kube-prometheus-stack
-    app.kubernetes.io/part-of: insighthub
+  labels: { release: kube-prometheus-stack, app.kubernetes.io/part-of: insighthub }
 spec:
   groups:
-    - name: insighthub.anomaly-recording
+    - name: insighthub.recording
       interval: 30s
       rules:
-        - record: insighthub:llm_latency_p95
-          expr: |
-            histogram_quantile(
-              0.95,
-              sum by (namespace, le) (
-                rate(insighthub_llm_call_latency_seconds_bucket[5m])
-              )
-            )
-        - record: insighthub:llm_latency_upper
-          expr: |
-            avg_over_time(insighthub:llm_latency_p95[1h])
-            + 3 * stddev_over_time(insighthub:llm_latency_p95[1h])
-    - name: insighthub.anomaly-alerts
+        - record: insighthub:api_error_ratio:5m
+          expr: sum by (namespace) (rate(insighthub_http_requests_total{status=~"5.."}[5m])) / clamp_min(sum by (namespace) (rate(insighthub_http_requests_total[5m])), 1)
+        - record: insighthub:api_latency_p95:5m
+          expr: histogram_quantile(0.95, sum by (namespace, le) (rate(insighthub_http_request_duration_seconds_bucket[5m])))
+        - record: insighthub:llm_latency_p95:5m
+          expr: histogram_quantile(0.95, sum by (namespace, le) (rate(insighthub_llm_call_latency_seconds_bucket[5m])))
+        - record: insighthub:llm_latency_upper:1h
+          expr: avg_over_time(insighthub:llm_latency_p95:5m[1h]) + 3 * stddev_over_time(insighthub:llm_latency_p95:5m[1h])
+        - record: insighthub:queue_depth_mean:1h
+          expr: avg_over_time(insighthub_queue_depth[1h])
+        - record: insighthub:queue_depth_upper:1h
+          expr: avg_over_time(insighthub_queue_depth[1h]) + 3 * stddev_over_time(insighthub_queue_depth[1h])
+        - record: insighthub:api_error_ratio_mean:1h
+          expr: avg_over_time(insighthub:api_error_ratio:5m[1h])
+        - record: insighthub:api_error_ratio_upper:1h
+          expr: avg_over_time(insighthub:api_error_ratio:5m[1h]) + 3 * stddev_over_time(insighthub:api_error_ratio:5m[1h])
+    - name: insighthub.alerts
       interval: 30s
       rules:
-        - alert: LLMLatencySpikeAnomaly
-          expr: insighthub:llm_latency_p95 > insighthub:llm_latency_upper
+        - alert: InsightHubHighApiErrorRate
+          expr: (insighthub:api_error_ratio:5m > insighthub:api_error_ratio_upper:1h) and (insighthub:api_error_ratio:5m > 0.05)
           for: 2m
-          labels:
-            severity: critical
-            service: api
-            team: insighthub
+          labels: { severity: critical, service: api, team: insighthub }
           annotations:
-            summary: "InsightHub LLM p95 latency is above its anomaly band"
-            description: >-
-              LLM p95 latency in namespace {{ $labels.namespace }} has exceeded
-              its rolling one-hour upper anomaly bound (mean + 3 standard
-              deviations) continuously for more than two minutes. Check the
-              generation provider, API saturation, and recent deployments.
-        - alert: IngestionQueueBacklogAnomaly
-          expr: insighthub_queue_depth > 50
+            summary: "InsightHub API 5xx ratio is above 5%"
+            description: "API 5xx ratio in namespace {{ $labels.namespace }} exceeded 5% for two minutes. Check route/error metrics, providers, Redis, PostgreSQL, and deployment revision."
+        - alert: InsightHubHighApiLatency
+          expr: insighthub:api_latency_p95:5m > 5
+          for: 2m
+          labels: { severity: warning, service: api, team: insighthub }
+          annotations:
+            summary: "InsightHub API p95 latency is above 5 seconds"
+            description: "API p95 latency in namespace {{ $labels.namespace }} remained above five seconds for two minutes. Correlate API, LLM, database, queue and pod metrics."
+        - alert: InsightHubLlmlatencyAnomaly
+          expr: insighthub:llm_latency_p95:5m > insighthub:llm_latency_upper:1h
+          for: 2m
+          labels: { severity: warning, service: api, team: insighthub }
+          annotations:
+            summary: "InsightHub LLM p95 latency exceeds anomaly band"
+            description: "LLM p95 in namespace {{ $labels.namespace }} is above its one-hour mean plus 3 standard deviations for two minutes. Confirm baseline quality before escalation."
+        - alert: InsightHubIngestionFailures
+          expr: sum by (namespace) (increase(insighthub_ingestion_jobs_total{outcome="failed"}[5m])) >= 3
+          for: 2m
+          labels: { severity: critical, service: ingestion-worker, team: insighthub }
+          annotations:
+            summary: "InsightHub ingestion has three or more terminal failures"
+            description: "At least three ingestion attempts failed in five minutes in {{ $labels.namespace }}. Inspect sanitized worker events, retries and provider health."
+        - alert: InsightHubRedisQueueBacklog
+          expr: (insighthub_queue_depth > insighthub:queue_depth_upper:1h) and (insighthub_queue_depth > 50)
           for: 3m
-          labels:
-            severity: warning
-            service: ingestion-worker
-            team: insighthub
+          labels: { severity: warning, service: ingestion-worker, team: insighthub }
           annotations:
-            summary: "InsightHub ingestion queue backlog is above 50 jobs"
-            description: >-
-              The Redis-backed ingestion queue in namespace {{ $labels.namespace }}
-              has remained above 50 pending jobs for more than three minutes.
-              Check worker replica health, Redis connectivity, and provider
-              latency before increasing worker capacity.
-        - alert: ErrorRateBurstAnomaly
-          expr: |
-            (
-              sum by (namespace) (
-                rate(insighthub_http_requests_total{status=~"5.."}[5m])
-              )
-              /
-              clamp_min(
-                sum by (namespace) (
-                  rate(insighthub_http_requests_total[5m])
-                ),
-                1
-              )
-            ) > 0.05
+            summary: "InsightHub Redis ingestion queue has more than 50 jobs"
+            description: "ARQ queue in {{ $labels.namespace }} exceeded 50 pending jobs for three minutes. Check worker replicas, active jobs, retries and Redis health."
+        - alert: InsightHubRedisQueueOldestJob
+          expr: insighthub_queue_oldest_job_age_seconds > 300
+          for: 3m
+          labels: { severity: warning, service: ingestion-worker, team: insighthub }
+          annotations:
+            summary: "InsightHub queue has a job older than five minutes"
+            description: "Oldest pending ARQ job in {{ $labels.namespace }} has remained older than five minutes. Verify worker progress before changing capacity."
+        - alert: InsightHubPodRestarted
+          expr: sum by (namespace, pod, container) (increase(kube_pod_container_status_restarts_total{pod=~"insighthub-.*"}[15m])) > 0
           for: 1m
-          labels:
-            severity: critical
-            service: api
-            team: insighthub
+          labels: { severity: warning, service: kubernetes, team: insighthub }
           annotations:
-            summary: "InsightHub HTTP 5xx error rate exceeds 5 percent"
-            description: >-
-              The InsightHub HTTP 5xx request ratio in namespace
-              {{ $labels.namespace }} has been above 5% for more than one
-              minute. Investigate API logs, upstream LLM/embedding providers,
-              Redis, PostgreSQL, and the most recent deployment.
+            summary: "InsightHub container restarted"
+            description: "Container {{ $labels.container }} in pod {{ $labels.pod }} restarted in {{ $labels.namespace }}. Check pod events, limits and logs."
+        - alert: InsightHubDeploymentUnavailable
+          expr: min by (namespace, deployment) (kube_deployment_status_replicas_available{deployment=~"insighthub-(web|api|worker)"}) < min by (namespace, deployment) (kube_deployment_spec_replicas{deployment=~"insighthub-(web|api|worker)"})
+          for: 5m
+          labels: { severity: critical, service: kubernetes, team: insighthub }
+          annotations:
+            summary: "InsightHub deployment has unavailable replicas"
+            description: "Deployment {{ $labels.deployment }} in {{ $labels.namespace }} has fewer available replicas than desired for five minutes."
