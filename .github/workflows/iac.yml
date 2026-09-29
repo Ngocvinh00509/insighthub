@@ -426,8 +426,139 @@ jobs:
             --namespace kube-system --version "$CSI_AWS_PROVIDER_CHART_VERSION" \
             --set driverWritesSecrets=true
 
-  deploy-helm:
+  deliver-application-secret:
     needs: install-secrets-store-csi
+    runs-on: [self-hosted, linux, x64, insighthub-private-vpc]
+    environment: lab-aws-platform
+    permissions: { contents: read, id-token: write }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with: { persist-credentials: false }
+      - uses: hashicorp/setup-terraform@3c0c5d2e5b5d4c431f0e3f43ee8d4aa6d09b5f8d
+        with: { terraform_version: 1.15.9 }
+      - uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ vars.TF_APPLY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - name: Require approved secret-delivery inputs
+        env:
+          AWS_REGION: ${{ vars.AWS_REGION }}
+          TF_ENVIRONMENT: ${{ vars.TF_ENVIRONMENT }}
+          TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
+          TF_CORE_STATE_KEY: ${{ vars.TF_CORE_STATE_KEY }}
+          TF_PLATFORM_STATE_KEY: ${{ vars.TF_PLATFORM_STATE_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          test -n "$AWS_REGION"
+          test -n "$TF_ENVIRONMENT"
+          test -n "$TF_STATE_BUCKET"
+          test -n "$TF_CORE_STATE_KEY"
+          test -n "$TF_PLATFORM_STATE_KEY"
+          test -n "$OPENAI_API_KEY"
+      - name: Configure Terraform state for delivery metadata
+        env:
+          AWS_REGION: ${{ vars.AWS_REGION }}
+          TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
+          TF_CORE_STATE_KEY: ${{ vars.TF_CORE_STATE_KEY }}
+          TF_PLATFORM_STATE_KEY: ${{ vars.TF_PLATFORM_STATE_KEY }}
+        run: |
+          terraform -chdir=infra/core init -input=false -reconfigure \
+            -backend-config="bucket=${TF_STATE_BUCKET}" \
+            -backend-config="key=${TF_CORE_STATE_KEY}" \
+            -backend-config="region=${AWS_REGION}" \
+            -backend-config="encrypt=true" \
+            -backend-config="use_lockfile=true"
+          terraform -chdir=infra/platform init -input=false -reconfigure \
+            -backend-config="bucket=${TF_STATE_BUCKET}" \
+            -backend-config="key=${TF_PLATFORM_STATE_KEY}" \
+            -backend-config="region=${AWS_REGION}" \
+            -backend-config="encrypt=true" \
+            -backend-config="use_lockfile=true"
+      - name: Deliver application runtime secret without logging material
+        env:
+          AWS_REGION: ${{ vars.AWS_REGION }}
+          TF_ENVIRONMENT: ${{ vars.TF_ENVIRONMENT }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          set -euo pipefail
+          umask 077
+          payload_file="$(mktemp)"
+          rds_secret_file="$(mktemp)"
+          trap 'rm -f "$payload_file" "$rds_secret_file"' EXIT
+
+          app_secret_arn="$(terraform -chdir=infra/platform output -raw application_secret_arn)"
+          rds_master_secret_arn="$(terraform -chdir=infra/platform output -raw database_secret_arn)"
+          db_instance="insighthub-${TF_ENVIRONMENT}"
+          redis_replication_group="insighthub-${TF_ENVIRONMENT}"
+          db_endpoint="$(aws rds describe-db-instances --db-instance-identifier "$db_instance" --query 'DBInstances[0].Endpoint.Address' --output text)"
+          db_name="$(aws rds describe-db-instances --db-instance-identifier "$db_instance" --query 'DBInstances[0].DBName' --output text)"
+          db_username="$(aws rds describe-db-instances --db-instance-identifier "$db_instance" --query 'DBInstances[0].MasterUsername' --output text)"
+          redis_endpoint="$(aws elasticache describe-replication-groups --replication-group-id "$redis_replication_group" --query 'ReplicationGroups[0].NodeGroups[0].PrimaryEndpoint.Address' --output text)"
+          redis_port="$(aws elasticache describe-replication-groups --replication-group-id "$redis_replication_group" --query 'ReplicationGroups[0].NodeGroups[0].PrimaryEndpoint.Port' --output text)"
+
+          aws secretsmanager get-secret-value --secret-id "$rds_master_secret_arn" --query SecretString --output text > "$rds_secret_file"
+          database_url="$(python3 - "$rds_secret_file" "$db_endpoint" "$db_name" "$db_username" <<'PY'
+          import json
+          import sys
+          from urllib.parse import quote
+
+          with open(sys.argv[1], encoding="utf-8") as secret_file:
+              password = json.load(secret_file)["password"]
+          print(
+              f"postgresql://{quote(sys.argv[4], safe='')}:{quote(password, safe='')}"
+              f"@{sys.argv[2]}:5432/{quote(sys.argv[3], safe='')}?sslmode=require"
+          )
+          PY
+          )"
+          redis_url="rediss://${redis_endpoint}:${redis_port}"
+
+          DATABASE_URL="$database_url" REDIS_URL="$redis_url" OPENAI_API_KEY="$OPENAI_API_KEY" \
+            python3 - "$payload_file" <<'PY'
+          import json
+          import os
+          import sys
+
+          with open(sys.argv[1], "w", encoding="utf-8") as payload:
+              json.dump(
+                  {
+                      "DATABASE_URL": os.environ["DATABASE_URL"],
+                      "REDIS_URL": os.environ["REDIS_URL"],
+                      "OPENAI_API_KEY": os.environ["OPENAI_API_KEY"],
+                  },
+                  payload,
+              )
+          PY
+
+          aws secretsmanager put-secret-value \
+            --secret-id "$app_secret_arn" \
+            --secret-string "file://${payload_file}" \
+            --version-stages AWSCURRENT \
+            --query VersionId --output text >/dev/null
+      - name: Verify application secret version metadata
+        env:
+          AWS_REGION: ${{ vars.AWS_REGION }}
+        run: |
+          set -euo pipefail
+          app_secret_arn="$(terraform -chdir=infra/platform output -raw application_secret_arn)"
+          metadata_file="$(mktemp)"
+          trap 'rm -f "$metadata_file"' EXIT
+          aws secretsmanager describe-secret --secret-id "$app_secret_arn" \
+            --query VersionIdsToStages --output json > "$metadata_file"
+          python3 - "$metadata_file" <<'PY'
+          import json
+          import sys
+
+          with open(sys.argv[1], encoding="utf-8") as metadata_file:
+              versions = json.load(metadata_file)
+          if not isinstance(versions, dict):
+              raise SystemExit("application secret has no version metadata")
+          if sum("AWSCURRENT" in stages for stages in versions.values()) != 1:
+              raise SystemExit("application secret must have exactly one AWSCURRENT version")
+          PY
+          echo "Application secret AWSCURRENT metadata verified."
+
+  deploy-helm:
+    needs: deliver-application-secret
     runs-on: [self-hosted, linux, x64, insighthub-private-vpc]
     environment: lab-aws-platform
     permissions: { contents: read, id-token: write }

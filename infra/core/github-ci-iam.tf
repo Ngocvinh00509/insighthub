@@ -27,6 +27,10 @@ locals {
 
   elasticache_cluster_arn = "arn:aws:elasticache:${var.aws_region}:${local.account_id}:cluster:insighthub-${var.environment}-*"
 
+  # The ElastiCache API authorizes CreateReplicationGroup against the selected
+  # parameter group as well as the new replication group.
+  elasticache_parameter_group_arn = "arn:aws:elasticache:${var.aws_region}:${local.account_id}:parametergroup:*"
+
   kms_key_arn    = "arn:aws:kms:${var.aws_region}:${local.account_id}:key/*"
   kms_alias_name = "alias/insighthub-${var.environment}"
   kms_alias_arn  = "arn:aws:kms:${var.aws_region}:${local.account_id}:${local.kms_alias_name}"
@@ -34,8 +38,6 @@ locals {
   application_secret_arn = "arn:aws:secretsmanager:${var.aws_region}:${local.account_id}:secret:insighthub/${var.environment}/application-*"
   secrets_arn            = "arn:aws:secretsmanager:${var.aws_region}:${local.account_id}:secret:insighthub/${var.environment}/*"
   rds_master_secret_arn  = "arn:aws:secretsmanager:${var.aws_region}:${local.account_id}:secret:rds!db-*"
-
-  local_platform_recovery_user_arn = "arn:aws:iam::${local.account_id}:user/DE000216"
 
   flow_log_arn       = "arn:aws:ec2:${var.aws_region}:${local.account_id}:vpc-flow-log/*"
   flow_log_group_arn = "arn:aws:logs:${var.aws_region}:${local.account_id}:log-group:/aws/vpc/insighthub-${var.environment}-flow-logs"
@@ -1208,7 +1210,8 @@ locals {
         "secretsmanager:TagResource",
         "secretsmanager:UntagResource",
         "secretsmanager:UpdateSecret",
-        "secretsmanager:ListSecretVersionIds"
+        "secretsmanager:ListSecretVersionIds",
+        "secretsmanager:PutSecretValue"
       ]
       Resource = local.application_secret_arn
 
@@ -1218,6 +1221,12 @@ locals {
           "aws:ResourceTag/environment" = var.environment
         }
       }
+    },
+    {
+      Sid      = "ReadRdsManagedMasterSecretForSecretDelivery"
+      Effect   = "Allow"
+      Action   = ["secretsmanager:GetSecretValue"]
+      Resource = local.rds_master_secret_arn
     }
   ]
 
@@ -1229,7 +1238,7 @@ locals {
     ecr_kms    = slice(local.github_apply_policy_statements, 32, 38)
     iam        = slice(local.github_apply_policy_statements, 38, 43)
     flow_logs  = slice(local.github_apply_policy_statements, 43, 49)
-    data       = slice(local.github_apply_policy_statements, 49, 60)
+    data       = slice(local.github_apply_policy_statements, 49, 61)
   }
 }
 
@@ -1251,20 +1260,19 @@ resource "aws_iam_role_policy_attachment" "github_apply" {
   policy_arn = each.value.arn
 }
 
-# This is deliberately an inline recovery policy for the named local operator,
-# not a group or account-wide grant. It permits only the Platform resources
-# Terraform can still create or observe after the partial apply.
-resource "aws_iam_user_policy" "local_platform_recovery" {
-  name = "insighthub-${var.environment}-platform-recovery"
-  user = "DE000216"
+# This customer-managed recovery policy avoids the named operator's constrained
+# inline-policy quota while remaining attached only to that operator.
+resource "aws_iam_policy" "local_platform_recovery" {
+  name        = "insighthub-${var.environment}-platform-recovery"
+  description = "Least-privilege permissions for local Platform recovery"
 
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
       {
-        Sid    = "ReadPlatformState"
-        Effect = "Allow"
-        Action = ["s3:GetBucketLocation", "s3:ListBucket"]
+        Sid      = "ReadPlatformState"
+        Effect   = "Allow"
+        Action   = ["s3:GetBucketLocation", "s3:ListBucket"]
         Resource = local.terraform_state_bucket_arn
         Condition = {
           StringLike = {
@@ -1296,15 +1304,33 @@ resource "aws_iam_user_policy" "local_platform_recovery" {
           "ec2:DescribeSecurityGroups",
           "ec2:DescribeSubnets",
           "ec2:DescribeVpcs",
+          "rds:DescribeDBEngineVersions",
           "rds:DescribeDBInstances",
-          "rds:DescribeDBSubnetGroups"
+          "rds:DescribeDBSubnetGroups",
+          "rds:DescribeOrderableDBInstanceOptions"
         ]
         Resource = "*"
+      },
+      {
+        Sid    = "CreateInsightHubRDS"
+        Effect = "Allow"
+        Action = [
+          "rds:AddTagsToResource",
+          "rds:CreateDBInstance"
+        ]
+        Resource = local.rds_db_arn
+        Condition = {
+          StringEquals = {
+            "aws:RequestTag/project"     = "insighthub"
+            "aws:RequestTag/environment" = var.environment
+          }
+        }
       },
       {
         Sid    = "CreateInsightHubElastiCache"
         Effect = "Allow"
         Action = [
+          "elasticache:AddTagsToResource",
           "elasticache:CreateCacheSubnetGroup",
           "elasticache:CreateReplicationGroup"
         ]
@@ -1321,28 +1347,6 @@ resource "aws_iam_user_policy" "local_platform_recovery" {
         }
       },
       {
-        Sid    = "ManageInsightHubElastiCache"
-        Effect = "Allow"
-        Action = [
-          "elasticache:DeleteCacheSubnetGroup",
-          "elasticache:DeleteReplicationGroup",
-          "elasticache:ModifyCacheSubnetGroup",
-          "elasticache:ModifyReplicationGroup",
-          "elasticache:RemoveTagsFromResource"
-        ]
-        Resource = [
-          local.elasticache_cluster_arn,
-          local.elasticache_replication_group_arn,
-          local.elasticache_subnet_group_arn
-        ]
-        Condition = {
-          StringEquals = {
-            "aws:ResourceTag/project"     = "insighthub"
-            "aws:ResourceTag/environment" = var.environment
-          }
-        }
-      },
-      {
         Sid    = "ReadInsightHubElastiCache"
         Effect = "Allow"
         Action = [
@@ -1353,33 +1357,33 @@ resource "aws_iam_user_policy" "local_platform_recovery" {
         Resource = "*"
       },
       {
-        Sid      = "CreateInsightHubApplicationSecrets"
+        # This is separate from the creation/tagging grant above so it cannot
+        # be used to tag, modify, or delete any existing parameter group.
+        Sid      = "UseElastiCacheParameterGroupForRedisCreate"
         Effect   = "Allow"
-        Action   = ["secretsmanager:CreateSecret"]
+        Action   = ["elasticache:CreateReplicationGroup"]
+        Resource = local.elasticache_parameter_group_arn
+      },
+      {
+        # Existing subnet groups do not carry request tags for the
+        # CreateReplicationGroup authorization check.
+        Sid      = "UseElastiCacheSubnetGroupForRedisCreate"
+        Effect   = "Allow"
+        Action   = ["elasticache:CreateReplicationGroup"]
+        Resource = local.elasticache_subnet_group_arn
+      },
+      {
+        Sid    = "CreateInsightHubApplicationSecrets"
+        Effect = "Allow"
+        # Terraform sends default tags at creation time, which requires
+        # TagResource in addition to CreateSecret. Request tags restrict
+        # creation to the intended InsightHub environment.
+        Action   = ["secretsmanager:CreateSecret", "secretsmanager:TagResource"]
         Resource = local.secrets_arn
         Condition = {
           StringEquals = {
             "aws:RequestTag/project"     = "insighthub"
             "aws:RequestTag/environment" = var.environment
-          }
-        }
-      },
-      {
-        Sid    = "ManageInsightHubApplicationSecrets"
-        Effect = "Allow"
-        Action = [
-          "secretsmanager:DeleteSecret",
-          "secretsmanager:DescribeSecret",
-          "secretsmanager:ListSecretVersionIds",
-          "secretsmanager:TagResource",
-          "secretsmanager:UntagResource",
-          "secretsmanager:UpdateSecret"
-        ]
-        Resource = local.secrets_arn
-        Condition = {
-          StringEquals = {
-            "aws:ResourceTag/project"     = "insighthub"
-            "aws:ResourceTag/environment" = var.environment
           }
         }
       },
@@ -1404,7 +1408,7 @@ resource "aws_iam_user_policy" "local_platform_recovery" {
         Resource = aws_kms_key.platform.arn
         Condition = {
           Bool = { "kms:GrantIsForAWSResource" = "true" }
-          ForAnyValue:StringEquals = {
+          "ForAnyValue:StringEquals" = {
             "kms:ViaService" = [
               "rds.${var.aws_region}.amazonaws.com",
               "secretsmanager.${var.aws_region}.amazonaws.com"
@@ -1418,7 +1422,7 @@ resource "aws_iam_user_policy" "local_platform_recovery" {
         Action   = ["kms:Decrypt", "kms:GenerateDataKey"]
         Resource = aws_kms_key.platform.arn
         Condition = {
-          ForAnyValue:StringEquals = {
+          "ForAnyValue:StringEquals" = {
             "kms:ViaService" = [
               "rds.${var.aws_region}.amazonaws.com",
               "secretsmanager.${var.aws_region}.amazonaws.com"
@@ -1428,4 +1432,9 @@ resource "aws_iam_user_policy" "local_platform_recovery" {
       }
     ]
   })
+}
+
+resource "aws_iam_user_policy_attachment" "local_platform_recovery" {
+  user       = "DE000216"
+  policy_arn = aws_iam_policy.local_platform_recovery.arn
 }
