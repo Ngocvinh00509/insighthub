@@ -22,4 +22,6 @@ externalSecrets:
   # Keys are extracted from one Secrets Manager JSON secret and synced only to
   # an in-namespace Secret while a pod mounts the CSI volume.
   keys: [DATABASE_URL, REDIS_URL, OPENAI_API_KEY]
+existingSecret:
+  name: ""
 serviceAccounts: { apiRoleArn: "", workerRoleArn: "" }
