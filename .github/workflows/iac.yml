@@ -8,6 +8,12 @@ on:
     paths: ["infra/**", "deploy/**", ".github/workflows/iac.yml"]
   workflow_dispatch:
     inputs:
+      operation:
+        description: "Run the normal deployment chain or only deliver the application secret"
+        required: true
+        type: choice
+        default: normal
+        options: [normal, secret-delivery-only]
       apply:
         description: "Apply reviewed saved plan (protected environment only)"
         type: boolean
@@ -24,6 +30,7 @@ concurrency:
 
 jobs:
   static:
+    if: github.event_name != 'workflow_dispatch' || inputs.operation != 'secret-delivery-only'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -51,7 +58,9 @@ jobs:
           for env in local dev staging; do helm template insighthub deploy/helm/insighthub -f deploy/helm/insighthub/values-$env.yaml >/dev/null; done
   core-plan:
     needs: static
-    if: github.event.pull_request.head.repo.fork == false || github.event_name != 'pull_request'
+    if: >-
+      (github.event_name != 'workflow_dispatch' || inputs.operation != 'secret-delivery-only') &&
+      (github.event.pull_request.head.repo.fork == false || github.event_name != 'pull_request')
     runs-on: ubuntu-24.04
     environment: plan-aws
     permissions: { contents: read, pull-requests: write, id-token: write }
@@ -428,6 +437,10 @@ jobs:
 
   deliver-application-secret:
     needs: install-secrets-store-csi
+    if: >-
+      always() &&
+      ((github.event_name == 'workflow_dispatch' && inputs.operation == 'secret-delivery-only') ||
+      needs.install-secrets-store-csi.result == 'success')
     runs-on: [self-hosted, linux, x64, insighthub-private-vpc]
     environment: lab-aws-platform
     permissions: { contents: read, id-token: write }
@@ -559,6 +572,9 @@ jobs:
 
   deploy-helm:
     needs: deliver-application-secret
+    if: >-
+      always() && needs.deliver-application-secret.result == 'success' &&
+      !(github.event_name == 'workflow_dispatch' && inputs.operation == 'secret-delivery-only')
     runs-on: [self-hosted, linux, x64, insighthub-private-vpc]
     environment: lab-aws-platform
     permissions: { contents: read, id-token: write }
@@ -614,6 +630,9 @@ jobs:
 
   smoke-validation:
     needs: deploy-helm
+    if: >-
+      always() && needs.deploy-helm.result == 'success' &&
+      !(github.event_name == 'workflow_dispatch' && inputs.operation == 'secret-delivery-only')
     runs-on: [self-hosted, linux, x64, insighthub-private-vpc]
     environment: lab-aws-platform
     permissions: { contents: read, id-token: write }
