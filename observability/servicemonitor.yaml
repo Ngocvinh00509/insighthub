@@ -1,0 +1,21 @@
+# Default-equivalent of the Helm ServiceMonitor. The chart template is the source
+# of truth because it scopes target namespaces to .Release.Namespace and allows
+# the platform's Prometheus release label to be configured.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: insighthub-metrics
+  labels:
+    release: kube-prometheus-stack
+    app.kubernetes.io/part-of: insighthub
+spec:
+  selector:
+    matchLabels:
+      observability.insighthub.io/scrape: "true"
+  endpoints:
+    - port: http-metrics
+      path: /metrics
+      interval: 30s
+
+# This selects API, worker and enabled exporter Services only. Web deliberately
+# has no scrape label: its supported source is kubelet/cAdvisor container metrics.

@@ -8,3 +8,13 @@ externalSecrets:
   secretName: insighthub-app
   secretArn: "REPLACE_WITH_APPLICATION_SECRET_ARN"
   keys: [DATABASE_URL, REDIS_URL, OPENAI_API_KEY]
+serviceAccounts:
+  # Non-secret IRSA reference required by the CSI-backed migration Job.
+  apiRoleArn: "REPLACE_WITH_API_IRSA_ROLE_ARN"
+  workerRoleArn: "REPLACE_WITH_WORKER_IRSA_ROLE_ARN"
+database:
+  bootstrap:
+    enabled: true
+observability:
+  exporters:
+    enabled: true

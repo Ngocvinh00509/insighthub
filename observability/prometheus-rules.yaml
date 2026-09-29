@@ -9,6 +9,7 @@ spec:
     - name: insighthub.recording
       interval: 30s
       rules:
+<<<<<<< Updated upstream
         - record: insighthub:api_error_ratio:5m
           expr: sum by (namespace) (rate(insighthub_http_requests_total{status=~"5.."}[5m])) / clamp_min(sum by (namespace) (rate(insighthub_http_requests_total[5m])), 1)
         - record: insighthub:api_latency_p95:5m
@@ -26,6 +27,29 @@ spec:
         - record: insighthub:api_error_ratio_upper:1h
           expr: avg_over_time(insighthub:api_error_ratio:5m[1h]) + 3 * stddev_over_time(insighthub:api_error_ratio:5m[1h])
     - name: insighthub.alerts
+=======
+        - record: insighthub:llm_latency_p95
+          expr: |
+            histogram_quantile(
+              0.95,
+              sum by (namespace, le) (
+                rate(insighthub_llm_call_latency_seconds_bucket[5m])
+              )
+            )
+        - record: insighthub:rag_query_latency_p95
+          expr: |
+            histogram_quantile(
+              0.95,
+              sum by (namespace, le) (
+                rate(insighthub_rag_query_latency_seconds_bucket[5m])
+              )
+            )
+        - record: insighthub:llm_latency_upper
+          expr: |
+            avg_over_time(insighthub:llm_latency_p95[1h])
+            + 3 * stddev_over_time(insighthub:llm_latency_p95[1h])
+    - name: insighthub.anomaly-alerts
+>>>>>>> Stashed changes
       interval: 30s
       rules:
         - alert: InsightHubHighApiErrorRate

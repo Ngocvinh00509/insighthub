@@ -1,4 +1,8 @@
 local: { enabled: true }
+database:
+  bootstrap:
+    enabled: true
 global: { environment: local, ragMode: fixture }
 providers: { llm: fixture, embedding: fixture }
 ingress: { enabled: false }
+hpa: { enabled: false, minReplicas: 1, maxReplicas: 2, cpu: 70 }

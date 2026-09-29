@@ -9,6 +9,9 @@ from app.core.providers import post_json
 from app.core.metrics import (
     embedding_tokens_total,
     embedding_estimated_tokens_total,
+    llm_generation_estimated_cost_dollars_total,
+    APPROVED_GENERATION_COST_MODEL,
+    record_generation_estimated_cost,
     record_embedding_usage,
 )
 from app.services.embeddings import embed, validate_vectors
@@ -226,6 +229,25 @@ class EmbeddingTests(unittest.TestCase):
         self.assertGreater(
             embedding_estimated_tokens_total.labels("openai", "query")._value.get(),
             estimate,
+        )
+
+    def test_generation_cost_requires_complete_usage_for_the_approved_model(self):
+        before = llm_generation_estimated_cost_dollars_total._value.get()
+        record_generation_estimated_cost(
+            "openai", APPROVED_GENERATION_COST_MODEL, 1_000_000, 1_000_000
+        )
+        self.assertEqual(
+            llm_generation_estimated_cost_dollars_total._value.get(), before + 35
+        )
+        record_generation_estimated_cost(
+            "fixture", APPROVED_GENERATION_COST_MODEL, 1, 1
+        )
+        record_generation_estimated_cost("openai", "another-model", 1, 1)
+        record_generation_estimated_cost(
+            "openai", APPROVED_GENERATION_COST_MODEL, None, 1
+        )
+        self.assertEqual(
+            llm_generation_estimated_cost_dollars_total._value.get(), before + 35
         )
 
 

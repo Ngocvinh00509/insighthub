@@ -7,9 +7,16 @@ import time
 from datetime import datetime, timezone
 from typing import Any
 
+from arq import Retry, create_pool
 from app.core.config import get_settings
 from app.core.db import close_pool, get_conn, initialize_database
 from app.core.errors import DocumentConflict, DocumentNotFound, ServiceError
+from app.core.metrics import (
+    ingestion_queue_depth,
+    queue_depth_refresh_errors_total,
+    worker_documents_total,
+    worker_processing_seconds,
+)
 from app.core.queue import redis_settings
 from app.core.metrics import (
     ingestion_active_jobs,
@@ -18,7 +25,10 @@ from app.core.metrics import (
     ingestion_retries_total,
 )
 from app.services.ingestion import process_document as ingest_atomic
+<<<<<<< Updated upstream
 from arq import Retry
+=======
+>>>>>>> Stashed changes
 from prometheus_client import start_http_server
 
 logger = logging.getLogger("insighthub.worker")
@@ -70,16 +80,50 @@ def mark_failed(document_id: int, error_code: str) -> None:
         )
 
 
+async def refresh_queue_depth() -> None:
+    """Sample ARQ's Redis sorted-set queue without inventing a fallback value."""
+    settings = get_settings()
+    while True:
+        pool = None
+        try:
+            pool = await create_pool(redis_settings())
+            depth = await pool.zcard(settings.ingestion_queue)
+            ingestion_queue_depth.labels(settings.ingestion_queue).set(depth)
+        except Exception:  # noqa: BLE001 - metric collection must not stop ingestion
+            queue_depth_refresh_errors_total.inc()
+            logger.warning("Queue depth refresh failed")
+        finally:
+            if pool is not None:
+                try:
+                    await pool.aclose()
+                except Exception:  # noqa: BLE001 - do not leak Redis diagnostics
+                    logger.warning("Queue depth connection cleanup failed")
+        await asyncio.sleep(15)
+
+
 async def startup(ctx: dict[str, Any]) -> None:
     global metrics_server_started
     configure_logging()
     await asyncio.to_thread(initialize_database)
+<<<<<<< Updated upstream
     if not metrics_server_started:
         start_http_server(get_settings().worker_metrics_port, addr="0.0.0.0")
         metrics_server_started = True
+=======
+    server, _thread = start_http_server(get_settings().worker_metrics_port)
+    ctx["metrics_server"] = server
+    ctx["queue_metrics_task"] = asyncio.create_task(refresh_queue_depth())
+>>>>>>> Stashed changes
 
 
 async def shutdown(ctx: dict[str, Any]) -> None:
+    task = ctx.get("queue_metrics_task")
+    if task is not None:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+    server = ctx.get("metrics_server")
+    if server is not None:
+        await asyncio.to_thread(server.shutdown)
     await asyncio.to_thread(close_pool)
 
 
@@ -88,8 +132,13 @@ async def process_document(
 ) -> int:
     """Run extract/chunk/embed/store off the event loop, preserving row locks."""
     attempt = ctx.get("job_try", 1)
+<<<<<<< Updated upstream
     started_at = time.perf_counter()
     ingestion_active_jobs.inc()
+=======
+    started = time.monotonic()
+    outcome = "failed"
+>>>>>>> Stashed changes
     try:
         count = await asyncio.to_thread(
             ingest_atomic,
@@ -98,11 +147,16 @@ async def process_document(
             content,
             retry_pending=attempt < MAX_ATTEMPTS,
         )
+        outcome = "ready"
     except (DocumentConflict, DocumentNotFound) as exc:
         # A stale/conflicting job must not change the legitimate document's state.
         emit("ingestion_rejected", document_id, error_code=exc.code, attempt=attempt)
+<<<<<<< Updated upstream
         ingestion_jobs_total.labels("rejected").inc()
         ingestion_job_duration.labels("rejected").observe(time.perf_counter() - started_at)
+=======
+        outcome = "rejected"
+>>>>>>> Stashed changes
         raise
     except Exception as exc:  # noqa: BLE001 - persist status and sanitize errors
         error = exc if isinstance(exc, ServiceError) else ServiceError()
@@ -115,9 +169,13 @@ async def process_document(
                 attempt=attempt,
                 retry_in_seconds=delay,
             )
+<<<<<<< Updated upstream
             ingestion_jobs_total.labels("retry").inc()
             ingestion_retries_total.inc()
             ingestion_job_duration.labels("retry").observe(time.perf_counter() - started_at)
+=======
+            outcome = "retry"
+>>>>>>> Stashed changes
             raise Retry(defer=delay) from None
         try:
             await asyncio.to_thread(mark_failed, document_id, error.code)
@@ -134,6 +192,7 @@ async def process_document(
         ingestion_jobs_total.labels("failed").inc()
         ingestion_job_duration.labels("failed").observe(time.perf_counter() - started_at)
         raise error from None
+<<<<<<< Updated upstream
     else:
         emit(
             "ingestion_completed",
@@ -147,6 +206,19 @@ async def process_document(
         return count
     finally:
         ingestion_active_jobs.dec()
+=======
+    finally:
+        worker_processing_seconds.labels(outcome).observe(time.monotonic() - started)
+        worker_documents_total.labels(outcome).inc()
+    emit(
+        "ingestion_completed",
+        document_id,
+        status="ready",
+        chunk_count=count,
+        attempt=attempt,
+    )
+    return count
+>>>>>>> Stashed changes
 
 
 class WorkerSettings:

@@ -35,7 +35,7 @@ jobs:
           terraform fmt -check -recursive infra
           for root in bootstrap core platform; do terraform -chdir=infra/$root init -backend=false -input=false; terraform -chdir=infra/$root validate; done
       - name: TFLint pinned tool
-        uses: terraform-linters/setup-tflint@v5 # replace with reviewed immutable SHA before enabling cloud jobs
+        uses: terraform-linters/setup-tflint@6770de8d186019a148cc2b144e8bfa627f7d4aa8 # v5
         with: { tflint_version: v0.64.0 }
       - name: Lint isolated Terraform roots
         run: |
@@ -43,7 +43,7 @@ jobs:
             tflint --chdir=infra/$root --recursive
           done
       - name: Checkov
-        uses: bridgecrewio/checkov-action@v12 # replace with reviewed immutable SHA before enabling cloud jobs
+        uses: bridgecrewio/checkov-action@5798bad4f6dd9c1fb67ae3ec10d42d8fb67037c4 # v12
         with: { directory: infra, quiet: true }
       - name: Helm render
         run: |

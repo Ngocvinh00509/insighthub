@@ -1,4 +1,23 @@
+<<<<<<< Updated upstream
 {{- if and .Values.externalSecrets.enabled .Values.database.bootstrap.enabled }}
+=======
+{{- $useExternalSecrets := .Values.externalSecrets.enabled }}
+{{- $useExistingSecret := and (not $useExternalSecrets) (ne .Values.existingSecret.name "") }}
+{{- if .Values.database.bootstrap.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "insighthub.name" . }}-database-schema
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-5"
+    "helm.sh/hook-delete-policy": before-hook-creation
+data:
+  init.sql: |
+{{ .Files.Get "files/init.sql" | indent 4 }}
+---
+{{- if or $useExternalSecrets $useExistingSecret }}
+>>>>>>> Stashed changes
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -11,6 +30,7 @@ metadata:
     "helm.sh/hook-weight": "-20"
     "helm.sh/hook-delete-policy": before-hook-creation
 ---
+{{- end }}
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -35,19 +55,56 @@ spec:
           command: ["/bin/sh", "-ec"]
           args:
             - |
+<<<<<<< Updated upstream
               psql "$(cat /mnt/secrets-store/DATABASE_URL)" -v ON_ERROR_STOP=1 <<'SQL'
 {{ .Values.database.bootstrap.sql | indent 14 }}
               SQL
           securityContext: { allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: ["ALL"] } }
+=======
+              {{- if $useExternalSecrets }}
+              psql "$(cat /mnt/secrets-store/DATABASE_URL)" -v ON_ERROR_STOP=1 -f /schema/init.sql
+              {{- else }}
+              psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f /schema/init.sql
+              {{- end }}
+          securityContext: { allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: ["ALL"] } }
+          {{- if $useExistingSecret }}
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.existingSecret.name }}
+                  key: DATABASE_URL
+          {{- end }}
+          {{- if and (not $useExternalSecrets) (not $useExistingSecret) }}
+          env:
+            - name: DATABASE_URL
+              value: {{ .Values.database.url | quote }}
+          {{- end }}
+>>>>>>> Stashed changes
           volumeMounts:
+            - name: database-schema
+              mountPath: /schema
+              readOnly: true
+          {{- if $useExternalSecrets }}
             - name: application-secrets
               mountPath: /mnt/secrets-store
               readOnly: true
       volumes:
+        - name: database-schema
+          configMap: { name: {{ include "insighthub.name" . }}-database-schema }
         - name: application-secrets
           csi:
             driver: secrets-store.csi.k8s.io
             readOnly: true
             volumeAttributes:
               secretProviderClass: {{ .Values.externalSecrets.secretProviderClass }}
+<<<<<<< Updated upstream
+=======
+      {{- end }}
+      {{- if not $useExternalSecrets }}
+      volumes:
+        - name: database-schema
+          configMap: { name: {{ include "insighthub.name" . }}-database-schema }
+      {{- end }}
+>>>>>>> Stashed changes
 {{- end }}

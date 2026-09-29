@@ -1,0 +1,13 @@
+# Runtime override for the kube-prometheus-stack installed outside this chart.
+# Apply only through the platform-owned release; this repository does not install
+# Prometheus itself.
+prometheus:
+  prometheusSpec:
+    retention: 15d
+    resources:
+      requests:
+        cpu: 250m
+        memory: 1Gi
+      limits:
+        cpu: "1"
+        memory: 2Gi

@@ -1,217 +1,26 @@
 {
-  "__inputs": [
-    {
-      "name": "DS_PROMETHEUS",
-      "label": "Prometheus",
-      "description": "Default Prometheus datasource",
-      "type": "datasource",
-      "pluginId": "prometheus",
-      "pluginName": "Prometheus"
-    }
-  ],
-  "annotations": {
-    "list": [
-      {
-        "name": "Deploy events",
-        "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-        "enable": true,
-        "iconColor": "#5794F2",
-        "target": {
-          "expr": "changes(kube_deployment_status_observed_generation{namespace=\"$namespace\", deployment=~\".*insighthub.*\"}[5m]) > 0",
-          "refId": "Deployments"
-        },
-        "titleFormat": "InsightHub deployment",
-        "textFormat": "Deployment generation changed in $namespace",
-        "tags": ["deploy", "insighthub"]
-      }
-    ]
-  },
-  "description": "InsightHub RED + USE + AI Insights and LiteLLM FinOps dashboard. LiteLLM cost panels require the Prometheus callback and budget database.",
+  "__inputs": [{ "name": "DS_PROMETHEUS", "label": "Prometheus", "type": "datasource", "pluginId": "prometheus", "pluginName": "Prometheus" }],
+  "annotations": { "list": [{ "name": "Deploy events", "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "enable": true, "iconColor": "#5794F2", "target": { "expr": "changes(kube_deployment_status_observed_generation{namespace=\"$namespace\",deployment=~\".*insighthub.*\"}[5m]) > 0", "refId": "Deployments" }, "titleFormat": "InsightHub deployment", "textFormat": "Deployment generation changed in $namespace", "tags": ["deploy", "insighthub"] }] },
+  "description": "InsightHub Day 4: exactly nine RED/USE and generation-observability panels. A missing queue or cost series is unavailable, not zero.",
   "editable": true,
-  "fiscalYearStartMonth": 0,
-  "graphTooltip": 0,
-  "id": null,
-  "links": [],
-  "liveNow": false,
   "panels": [
-    {
-      "id": 1,
-      "title": "RED Rate - Request rate by service",
-      "type": "timeseries",
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 0 },
-      "targets": [{ "expr": "sum(rate(insighthub_http_requests_total{namespace=\"$namespace\"}[5m])) by (service)", "legendFormat": "{{service}}", "refId": "A" }],
-      "fieldConfig": { "defaults": { "unit": "reqps", "color": { "mode": "palette-classic" } }, "overrides": [] },
-      "options": { "legend": { "displayMode": "table", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } }
-    },
-    {
-      "id": 2,
-      "title": "RED Errors - 5xx error rate",
-      "type": "timeseries",
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 0 },
-      "targets": [{ "expr": "sum(rate(insighthub_http_requests_total{namespace=\"$namespace\",status=~\"5..\"}[5m]))", "legendFormat": "5xx errors", "refId": "A" }],
-      "fieldConfig": { "defaults": { "unit": "reqps", "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 0.01 }] } }, "overrides": [] },
-      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "single", "sort": "none" } }
-    },
-    {
-      "id": 3,
-      "title": "RED Duration - HTTP p95 latency",
-      "type": "timeseries",
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 0 },
-      "targets": [{ "expr": "histogram_quantile(0.95, sum(rate(insighthub_rag_query_latency_seconds_bucket{namespace=\"$namespace\"}[5m])) by (le))", "legendFormat": "p95", "refId": "A" }],
-      "fieldConfig": { "defaults": { "unit": "s", "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "orange", "value": 2 }, { "color": "red", "value": 5 }] } }, "overrides": [] },
-      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "single", "sort": "none" } }
-    },
-    {
-      "id": 4,
-      "title": "Queue Depth - Redis pending jobs",
-      "type": "stat",
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 8, "w": 6, "x": 0, "y": 8 },
-      "targets": [{ "expr": "sum(insighthub_queue_depth{namespace=\"$namespace\"})", "legendFormat": "pending jobs", "refId": "A" }],
-      "fieldConfig": { "defaults": { "unit": "short", "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "orange", "value": 20 }, { "color": "red", "value": 100 }] } }, "overrides": [] },
-      "options": { "colorMode": "value", "graphMode": "area", "justifyMode": "auto", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" }
-    },
-    {
-      "id": 5,
-      "title": "AI Insights - LLM token usage per minute",
-      "type": "timeseries",
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 8, "w": 6, "x": 6, "y": 8 },
-      "targets": [{ "expr": "sum(rate(insighthub_llm_tokens_total{namespace=\"$namespace\"}[5m])) by (provider, direction) * 60", "legendFormat": "{{provider}} {{direction}}", "refId": "A" }],
-      "fieldConfig": { "defaults": { "unit": "ops", "color": { "mode": "palette-classic" } }, "overrides": [] },
-      "options": { "legend": { "displayMode": "table", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } }
-    },
-    {
-      "id": 6,
-      "title": "AI Insights - LLM latency p95",
-      "type": "timeseries",
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 8, "w": 6, "x": 12, "y": 8 },
-      "targets": [{ "expr": "histogram_quantile(0.95, sum(rate(insighthub_llm_call_latency_seconds_bucket{namespace=\"$namespace\"}[5m])) by (le))", "legendFormat": "LLM p95", "refId": "A" }],
-      "fieldConfig": { "defaults": { "unit": "s", "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "orange", "value": 5 }, { "color": "red", "value": 15 }] } }, "overrides": [] },
-      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "single", "sort": "none" } }
-    },
-    {
-      "id": 7,
-      "title": "AI Insights - LLM estimated cost rate",
-      "type": "timeseries",
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 8, "w": 6, "x": 18, "y": 8 },
-      "targets": [{ "expr": "sum(rate(insighthub_llm_cost_dollars_total{namespace=\"$namespace\"}[5m])) * 3600", "legendFormat": "$/hour", "refId": "A" }],
-      "fieldConfig": { "defaults": { "unit": "currencyUSD", "decimals": 4, "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "orange", "value": 1 }, { "color": "red", "value": 5 }] } }, "overrides": [] },
-      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "single", "sort": "none" } }
-    },
-    {
-      "id": 8,
-      "title": "USE Resources - InsightHub pod CPU and RAM",
-      "type": "timeseries",
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 16 },
-      "targets": [
-        { "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=\"$namespace\",pod=~\"insighthub-.*\",container!=\"\"}[5m])) by (pod)", "legendFormat": "CPU {{pod}}", "refId": "A" },
-        { "expr": "sum(container_memory_working_set_bytes{namespace=\"$namespace\",pod=~\"insighthub-.*\",container!=\"\"}) by (pod)", "legendFormat": "RAM {{pod}}", "refId": "B" }
-      ],
-      "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" } }, "overrides": [{ "matcher": { "id": "byRegexp", "options": "^CPU.*" }, "properties": [{ "id": "unit", "value": "cores" }] }, { "matcher": { "id": "byRegexp", "options": "^RAM.*" }, "properties": [{ "id": "unit", "value": "bytes" }] }] },
-      "options": { "legend": { "displayMode": "table", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } }
-    },
-    {
-      "id": 10,
-      "title": "FinOps - LiteLLM cost burn by virtual key",
-      "type": "timeseries",
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "description": "Actual LiteLLM tracked spend. Keys are aliases only; raw key values are never used as labels.",
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 25 },
-      "targets": [
-        { "expr": "sum(rate(litellm_spend_metric_total{api_key_alias=~\"insighthub-app-key|chatops-bot-key|coding-workflow-key\"}[5m])) by (api_key_alias) * 3600", "legendFormat": "{{api_key_alias}} $/hour", "refId": "A" },
-        { "expr": "sum(rate(litellm_spend_metric_total{api_key_alias=~\"insighthub-app-key|chatops-bot-key|coding-workflow-key\"}[5m])) by (api_key_alias) * 86400", "legendFormat": "{{api_key_alias}} $/day", "refId": "B" }
-      ],
-      "fieldConfig": { "defaults": { "unit": "currencyUSD", "decimals": 4, "color": { "mode": "palette-classic" } }, "overrides": [] },
-      "options": { "legend": { "displayMode": "table", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } }
-    },
-    {
-      "id": 11,
-      "title": "FinOps - Prompt and completion tokens by virtual key",
-      "type": "timeseries",
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 25 },
-      "targets": [
-        { "expr": "sum(rate(litellm_input_tokens_metric_total{api_key_alias=~\"insighthub-app-key|chatops-bot-key|coding-workflow-key\"}[5m])) by (api_key_alias) * 60", "legendFormat": "{{api_key_alias}} prompt tokens/min", "refId": "A" },
-        { "expr": "sum(rate(litellm_output_tokens_metric_total{api_key_alias=~\"insighthub-app-key|chatops-bot-key|coding-workflow-key\"}[5m])) by (api_key_alias) * 60", "legendFormat": "{{api_key_alias}} completion tokens/min", "refId": "B" }
-      ],
-      "fieldConfig": { "defaults": { "unit": "ops", "color": { "mode": "palette-classic" } }, "overrides": [] },
-      "options": { "legend": { "displayMode": "table", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } }
-    },
-    {
-      "id": 12,
-      "title": "FinOps - LiteLLM response-cache hit rate",
-      "type": "timeseries",
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 33 },
-      "targets": [
-        { "expr": "sum(rate(litellm_cache_hits_metric_total{api_key_alias=~\"insighthub-app-key|chatops-bot-key|coding-workflow-key\"}[5m])) by (api_key_alias) / clamp_min(sum(rate(litellm_cache_hits_metric_total{api_key_alias=~\"insighthub-app-key|chatops-bot-key|coding-workflow-key\"}[5m]) + rate(litellm_cache_misses_metric_total{api_key_alias=~\"insighthub-app-key|chatops-bot-key|coding-workflow-key\"}[5m])) by (api_key_alias), 1)", "legendFormat": "{{api_key_alias}}", "refId": "A" }
-      ],
-      "fieldConfig": { "defaults": { "unit": "percentunit", "decimals": 2, "min": 0, "max": 1, "color": { "mode": "palette-classic" } }, "overrides": [] },
-      "options": { "legend": { "displayMode": "table", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } }
-    },
-    {
-      "id": 13,
-      "title": "FinOps - Provider cached prompt tokens",
-      "type": "timeseries",
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "description": "LiteLLM exports cached tokens but not a universal USD-savings metric. Use tracked spend above for actual cost; do not infer dollars from tokens without provider-specific pricing.",
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 33 },
-      "targets": [
-        { "expr": "sum(rate(litellm_input_cached_tokens_metric_total{api_key_alias=~\"insighthub-app-key|chatops-bot-key|coding-workflow-key\"}[5m])) by (api_key_alias) * 60", "legendFormat": "{{api_key_alias}} cached tokens/min", "refId": "A" },
-        { "expr": "sum(increase(litellm_input_cached_tokens_metric_total{api_key_alias=~\"insighthub-app-key|chatops-bot-key|coding-workflow-key\"}[$__range])) by (api_key_alias)", "legendFormat": "{{api_key_alias}} cached tokens (range)", "refId": "B" }
-      ],
-      "fieldConfig": { "defaults": { "unit": "ops", "color": { "mode": "palette-classic" } }, "overrides": [] },
-      "options": { "legend": { "displayMode": "table", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } }
-    },
-    {
-      "id": 9,
-      "title": "Deploy annotations and latency anomaly band",
-      "type": "timeseries",
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "description": "Blue shaded range is the rolling p95 baseline ± 2 standard deviations. Deployment events appear as dashboard annotations.",
-      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 41 },
-      "targets": [
-        { "expr": "histogram_quantile(0.95, sum(rate(insighthub_llm_call_latency_seconds_bucket{namespace=\"$namespace\"}[5m])) by (le))", "legendFormat": "LLM p95", "refId": "A" },
-        { "expr": "avg_over_time((histogram_quantile(0.95, sum(rate(insighthub_llm_call_latency_seconds_bucket{namespace=\"$namespace\"}[5m])) by (le)))[1h:5m]) + 2 * stddev_over_time((histogram_quantile(0.95, sum(rate(insighthub_llm_call_latency_seconds_bucket{namespace=\"$namespace\"}[5m])) by (le)))[1h:5m])", "legendFormat": "anomaly upper band", "refId": "B" },
-        { "expr": "avg_over_time((histogram_quantile(0.95, sum(rate(insighthub_llm_call_latency_seconds_bucket{namespace=\"$namespace\"}[5m])) by (le)))[1h:5m]) - 2 * stddev_over_time((histogram_quantile(0.95, sum(rate(insighthub_llm_call_latency_seconds_bucket{namespace=\"$namespace\"}[5m])) by (le)))[1h:5m])", "legendFormat": "anomaly lower band", "refId": "C" }
-      ],
-      "fieldConfig": { "defaults": { "unit": "s", "color": { "mode": "palette-classic" } }, "overrides": [{ "matcher": { "id": "byRegexp", "options": "anomaly.*" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "blue" } }, { "id": "custom.fillOpacity", "value": 15 }] }] },
-      "options": { "legend": { "displayMode": "table", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } }
-    }
+    { "id": 1, "title": "RED Rate - request rate by route", "type": "timeseries", "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "gridPos": { "h": 8, "w": 8, "x": 0, "y": 0 }, "targets": [{ "expr": "sum by (endpoint) (rate(insighthub_http_requests_total{namespace=\"$namespace\"}[5m]))", "legendFormat": "{{endpoint}}", "refId": "A" }], "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] }, "options": { "legend": { "displayMode": "table", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi" } } },
+    { "id": 2, "title": "RED Errors - HTTP 5xx rate", "type": "timeseries", "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "gridPos": { "h": 8, "w": 8, "x": 8, "y": 0 }, "targets": [{ "expr": "sum(rate(insighthub_http_requests_total{namespace=\"$namespace\",status=~\"5..\"}[5m]))", "legendFormat": "5xx errors", "refId": "A" }], "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] }, "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "single" } } },
+    { "id": 3, "title": "RED Duration - RAG p95", "type": "timeseries", "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "gridPos": { "h": 8, "w": 8, "x": 16, "y": 0 }, "targets": [{ "expr": "insighthub:rag_query_latency_p95{namespace=\"$namespace\"}", "legendFormat": "RAG p95", "refId": "A" }], "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] }, "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "single" } } },
+    { "id": 4, "title": "Queue depth - outstanding ARQ sorted-set entries", "description": "No series means worker/Redis telemetry is unavailable; it must not be read as queue depth zero.", "type": "stat", "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "gridPos": { "h": 8, "w": 6, "x": 0, "y": 8 }, "targets": [{ "expr": "sum(insighthub_queue_depth{namespace=\"$namespace\"})", "legendFormat": "pending jobs", "refId": "A" }], "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] }, "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" } },
+    { "id": 5, "title": "Generation token usage - provider reported", "type": "timeseries", "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "gridPos": { "h": 8, "w": 6, "x": 6, "y": 8 }, "targets": [{ "expr": "sum by (provider, direction) (rate(insighthub_llm_tokens_total{namespace=\"$namespace\"}[5m])) * 60", "legendFormat": "{{provider}} {{direction}}", "refId": "A" }], "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] }, "options": { "legend": { "displayMode": "table", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi" } } },
+    { "id": 6, "title": "Generation latency p95", "type": "timeseries", "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "gridPos": { "h": 8, "w": 6, "x": 12, "y": 8 }, "targets": [{ "expr": "insighthub:llm_latency_p95{namespace=\"$namespace\"}", "legendFormat": "LLM p95", "refId": "A" }], "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] }, "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "single" } } },
+    { "id": 7, "title": "Estimated generation cost - approved model only", "description": "Estimate for complete provider usage from gpt-5.6-sol only; excludes embedding and infrastructure and is not a bill. No series is unavailable, not USD 0.", "type": "timeseries", "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "gridPos": { "h": 8, "w": 6, "x": 18, "y": 8 }, "targets": [{ "expr": "sum(rate(insighthub_llm_generation_estimated_cost_dollars_total{namespace=\"$namespace\"}[5m])) * 3600", "legendFormat": "USD/hour", "refId": "A" }], "fieldConfig": { "defaults": { "unit": "currencyUSD", "decimals": 4 }, "overrides": [] }, "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "single" } } },
+    { "id": 8, "title": "USE Resources - InsightHub pod CPU and RAM", "type": "timeseries", "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "gridPos": { "h": 9, "w": 12, "x": 0, "y": 16 }, "targets": [{ "expr": "sum by (pod) (rate(container_cpu_usage_seconds_total{namespace=\"$namespace\",pod=~\"insighthub-.*\",container!=\"\"}[5m]))", "legendFormat": "CPU {{pod}}", "refId": "A" }, { "expr": "sum by (pod) (container_memory_working_set_bytes{namespace=\"$namespace\",pod=~\"insighthub-.*\",container!=\"\"})", "legendFormat": "RAM {{pod}}", "refId": "B" }], "fieldConfig": { "defaults": {}, "overrides": [{ "matcher": { "id": "byRegexp", "options": "^CPU.*" }, "properties": [{ "id": "unit", "value": "cores" }] }, { "matcher": { "id": "byRegexp", "options": "^RAM.*" }, "properties": [{ "id": "unit", "value": "bytes" }] }] }, "options": { "legend": { "displayMode": "table", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi" } } },
+    { "id": 9, "title": "Deployment history", "description": "kube-state-metrics deployment generation; actual rollout annotations are configured at dashboard level.", "type": "timeseries", "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "gridPos": { "h": 9, "w": 12, "x": 12, "y": 16 }, "targets": [{ "expr": "kube_deployment_status_observed_generation{namespace=\"$namespace\",deployment=~\".*insighthub.*\"}", "legendFormat": "{{deployment}} generation", "refId": "A" }], "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] }, "options": { "legend": { "displayMode": "table", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi" } } }
   ],
   "refresh": "30s",
   "schemaVersion": 39,
-  "tags": ["insighthub", "red", "use", "ai-insights", "finops", "litellm"],
-  "templating": {
-    "list": [
-      {
-        "name": "namespace",
-        "label": "Namespace",
-        "type": "query",
-        "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-        "definition": "label_values(kube_pod_info, namespace)",
-        "query": { "query": "label_values(kube_pod_info, namespace)", "refId": "NamespaceVariableQuery" },
-        "includeAll": false,
-        "multi": false,
-        "hide": 0,
-        "refresh": 1,
-        "current": { "selected": true, "text": "insighthub-dev", "value": "insighthub-dev" },
-        "options": []
-      }
-    ]
-  },
+  "tags": ["insighthub", "red", "use", "generation"],
+  "templating": { "list": [{ "name": "namespace", "label": "Namespace", "type": "query", "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "definition": "label_values(kube_pod_info, namespace)", "query": { "query": "label_values(kube_pod_info, namespace)", "refId": "NamespaceVariableQuery" }, "includeAll": false, "multi": false, "hide": 0, "refresh": 1, "current": { "selected": true, "text": "insighthub-dev", "value": "insighthub-dev" }, "options": [] }] },
   "time": { "from": "now-6h", "to": "now" },
-  "timepicker": {},
   "timezone": "browser",
-  "title": "InsightHub - RED, USE, AI Insights & FinOps",
+  "title": "InsightHub - Day 4 RED, USE and Generation",
   "uid": "insighthub-overview",
-  "version": 1,
-  "weekStart": ""
+  "version": 1
 }

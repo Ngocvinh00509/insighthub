@@ -27,7 +27,11 @@ class Settings(BaseSettings):
         repr=False,
     )
     ingestion_queue: str = Field(default="insighthub:ingestion", min_length=1)
+<<<<<<< Updated upstream
     worker_metrics_port: int = Field(default=9108, ge=1, le=65535)
+=======
+    worker_metrics_port: int = Field(default=9101, ge=1024, le=65535)
+>>>>>>> Stashed changes
     redis_url: str = Field(default="redis://redis:6379", repr=False)
     rag_mode: Literal["fixture", "real"] = "real"
     llm_provider: Literal["gemini", "anthropic", "ollama", "openai", "fixture"] = (

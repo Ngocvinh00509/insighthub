@@ -6,7 +6,12 @@ from typing import Literal
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.core.metrics import llm_call_latency, llm_tokens_total, rag_query_latency
+from app.core.metrics import (
+    llm_call_latency,
+    llm_tokens_total,
+    rag_query_latency,
+    record_generation_estimated_cost,
+)
 from app.services.llm import generate
 from app.services.retrieval import retrieve
 
@@ -51,6 +56,12 @@ def chat(req: ChatRequest):
         value = result["usage"].get(f"{direction}_tokens")
         if value is not None:
             llm_tokens_total.labels(result["provider"], direction).inc(value)
+    record_generation_estimated_cost(
+        result["provider"],
+        result["model"],
+        result["usage"].get("input_tokens"),
+        result["usage"].get("output_tokens"),
+    )
     return ChatResponse(
         **result,
         contexts=contexts,

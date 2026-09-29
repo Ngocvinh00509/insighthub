@@ -24,7 +24,7 @@ spec:
   replicas: 1
   selector: { matchLabels: { app.kubernetes.io/name: insighthub, app.kubernetes.io/component: {{ $component }} } }
   template:
-    metadata: { labels: { app.kubernetes.io/name: insighthub, app.kubernetes.io/component: {{ $component }} } }
+    metadata: { labels: { app.kubernetes.io/name: insighthub, app.kubernetes.io/part-of: insighthub, app.kubernetes.io/component: {{ $component }} } }
     spec:
       serviceAccountName: insighthub-{{ $component }}
       securityContext: { runAsNonRoot: true, seccompProfile: { type: RuntimeDefault } }
@@ -33,20 +33,37 @@ spec:
           image: {{ $image.repository }}:{{ $image.tag }}
           imagePullPolicy: {{ $image.pullPolicy }}
           ports:
+<<<<<<< Updated upstream
             - { name: http, containerPort: {{ $port }} }
             {{- if eq $component "worker" }}
             - { name: http-metrics, containerPort: {{ $.Values.observability.workerMetricsPort }} }
             {{- end }}
+=======
+          {{- if eq $component "worker" }}
+            - name: http-metrics
+              containerPort: {{ $.Values.observability.workerMetrics.port }}
+          {{- else }}
+            - name: http
+              containerPort: {{ $port }}
+          {{- end }}
+>>>>>>> Stashed changes
           securityContext: { allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: ["ALL"] } }
           resources: {{- toYaml $.Values.resources | nindent 12 }}
           env:
             - { name: RAG_MODE, value: {{ $.Values.global.ragMode | quote }} }
             - { name: LLM_PROVIDER, value: {{ $.Values.providers.llm | quote }} }
             - { name: EMBEDDING_PROVIDER, value: {{ $.Values.providers.embedding | quote }} }
+<<<<<<< Updated upstream
             {{- if eq $component "worker" }}
             - { name: WORKER_METRICS_PORT, value: {{ $.Values.observability.workerMetricsPort | quote }} }
             {{- end }}
           {{- if $.Values.externalSecrets.enabled }}
+=======
+          {{- if eq $component "worker" }}
+            - { name: WORKER_METRICS_PORT, value: {{ $.Values.observability.workerMetrics.port | quote }} }
+          {{- end }}
+          {{- if $useExternalSecrets }}
+>>>>>>> Stashed changes
           envFrom:
             - secretRef: { name: {{ $.Values.externalSecrets.secretName }} }
           {{- else }}
@@ -65,6 +82,9 @@ spec:
           {{- else }}
           livenessProbe: { httpGet: { path: {{ ternary "/api/health" "/healthz" (eq $component "web") }}, port: {{ $port }} }, initialDelaySeconds: 10 }
           readinessProbe: { httpGet: { path: {{ ternary "/api/health" "/readyz" (eq $component "web") }}, port: {{ $port }} }, initialDelaySeconds: 10 }
+          {{- else }}
+          livenessProbe: { tcpSocket: { port: http-metrics }, initialDelaySeconds: 15 }
+          readinessProbe: { tcpSocket: { port: http-metrics }, initialDelaySeconds: 15 }
           {{- end }}
       {{- if $.Values.externalSecrets.enabled }}
       volumes:
@@ -80,6 +100,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: insighthub-{{ $component }}
+<<<<<<< Updated upstream
   labels: { {{ $labels | replace "\n" ", " }}, app.kubernetes.io/component: {{ $component }} }
 spec:
   selector: { app.kubernetes.io/name: insighthub, app.kubernetes.io/component: {{ $component }} }
@@ -89,6 +110,33 @@ spec:
       targetPort: {{ ternary "http-metrics" "http" (eq $component "worker") }}
 ---
 {{- if ne $component "worker" }}
+=======
+  labels:
+    app.kubernetes.io/name: insighthub
+    app.kubernetes.io/part-of: insighthub
+    app.kubernetes.io/component: {{ $component }}
+    {{- if ne $component "web" }}
+    observability.insighthub.io/scrape: "true"
+    {{- end }}
+spec:
+  selector: { app.kubernetes.io/name: insighthub, app.kubernetes.io/component: {{ $component }} }
+  ports:
+    {{- if eq $component "worker" }}
+    - name: http-metrics
+      port: {{ $.Values.observability.workerMetrics.port }}
+      targetPort: http-metrics
+    {{- else if eq $component "api" }}
+    - name: http-metrics
+      port: {{ $port }}
+      targetPort: http
+    {{- else }}
+    - name: http
+      port: {{ $port }}
+      targetPort: http
+    {{- end }}
+---
+{{- if and (ne $component "worker") $.Values.hpa.enabled }}
+>>>>>>> Stashed changes
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata: { name: insighthub-{{ $component }} }

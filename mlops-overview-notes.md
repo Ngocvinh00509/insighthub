@@ -140,6 +140,7 @@ nộp Day 4 là **5/5** cùng evidence quiz.
 
 ### Đáp án / rubric
 
+<<<<<<< Updated upstream
 1. App: code/config/runtime; model: thêm data version, feature schema/pipeline,
    hyperparameters, evaluation/provenance và model version. Nêu được bốn ý hợp lệ.
 2. Vì embedding identity/vector space có thể khác; query và stored chunks phải
@@ -150,3 +151,115 @@ nộp Day 4 là **5/5** cùng evidence quiz.
    workflow; không tự retrain, thay threshold quality hoặc tự promote model.
 5. Xác minh approved model version/digest, input-output/feature schema compatibility,
    embedding/index identity và evidence SLO/quality/canary trước-sau rollback.
+=======
+Luồng chuẩn dưới đây nhấn mạnh nơi model chuyển từ thử nghiệm sang vận hành:
+
+```text
+Data
+  -> Train
+  -> Validate
+  -> Registry
+  -> Deploy (sau Approval Gate; có thể shadow/canary)
+  -> Monitor
+  -> Retrain Decision
+      └────────────────────────────────────────────> Training
+```
+
+| Giai đoạn | Primary owner | Vai trò DevOps |
+| --- | --- | --- |
+| Data Collection | Data Engineer | Cung cấp storage, IAM, retention, encryption, lineage plumbing và observability cho pipeline. |
+| Feature Engineering | ML Engineer / Data Engineer | Vận hành pipeline, kiểm soát version artifact và kiểm tra contract/schema. |
+| Training | ML Engineer | Cấp hạ tầng compute có quota, image/runner tái lập, secret delivery và cost telemetry. |
+| Validation | ML Engineer | Tự động hóa job, lưu evidence/metrics và bảo vệ quyền truy cập evaluation data. |
+| Model Registry | ML Engineer / Platform owner | Cung cấp registry, RBAC, audit trail, immutable version/digest và retention. |
+| Approval Gate | ML Engineer / Product owner | Triển khai policy-as-code, kiểm chứng evidence bắt buộc và bảo vệ promotion workflow. |
+| Shadow Deploy | DevOps / ML Platform | Triển khai traffic shadow không ảnh hưởng người dùng, đo latency/cost/error và bảo vệ dữ liệu. |
+| Canary Rollout | DevOps, với ML Engineer phê duyệt chất lượng | Thiết kế progressive delivery, SLO guardrail, rollback tự động/thủ công và quan sát theo version. |
+| Production + Monitoring | DevOps | Chịu trách nhiệm chính về reliability, alerting, capacity, logs/metrics/traces an toàn và on-call runbook. |
+| Drift Detection | ML Engineer (quality), DevOps (platform signal) | Vận hành telemetry/data checks, cảnh báo, dashboard và đảm bảo tín hiệu đến đúng owner. |
+| Retrain Decision | ML Engineer / Product owner | Gửi retrain signal có bằng chứng; vận hành workflow, không tự ý train hoặc tự promotion model. |
+
+## Block 3 — Bốn khái niệm MLOps cốt lõi qua lăng kính DevOps
+
+### 1. Model Registry
+
+Model Registry tương tự **Container Registry**: mỗi model có version, metadata,
+provenance và quyền promotion. MLflow là một ví dụ phổ biến về registry/experiment
+tracking. Khác với image registry, một entry model cần liên kết thêm training data,
+feature schema, evaluation metrics và compatibility contract. DevOps cần đảm bảo
+artifact immutable, RBAC/audit và deployment chỉ lấy artifact đã được phê duyệt.
+
+### 2. Approval Gate
+
+Approval Gate giống **metric-based PR review gate** trong CI/CD. Một model chỉ được
+promote khi evidence đạt các ngưỡng đã thống nhất: ví dụ quality metric, fairness
+check phù hợp, data/schema validation, security scan và inference latency/cost
+budget. Gate là policy có thể audit, không phải lời hứa trong ticket. DevOps triển
+khai enforcement và trail; ML Engineer chịu trách nhiệm chứng minh chất lượng.
+
+### 3. Drift Detection
+
+Drift Detection có quan hệ với AIOps anomaly detection, nhưng đối tượng là chất
+lượng dự đoán:
+
+- **Data drift:** phân phối input/feature thực tế khác distribution đã train, như
+  tỷ lệ missing hoặc histogram của một feature thay đổi.
+- **Concept drift:** quan hệ giữa input và target thay đổi; model có thể nhận input
+  hợp lệ nhưng prediction không còn chính xác khi có nhãn phản hồi.
+
+DevOps vận hành collection, dashboard và alert delivery. ML Engineer đặt ngưỡng,
+đánh giá ý nghĩa thống kê và quyết định có cần retrain. Không nên coi một alert
+drift là lệnh tự động thay model trong production.
+
+### 4. Rollback Model
+
+Rollback model giống rollback image/version, nhưng phải kiểm tra thêm compatibility
+schema **input/output**. Trước khi quay về version cũ, xác nhận serving API vẫn
+chấp nhận feature schema hiện tại, output contract không làm hỏng downstream,
+feature pipeline tương thích và registry artifact còn truy cập được. Canary,
+version labels, SLO/error guardrail và runbook làm cho rollback trở thành thao tác
+nhanh nhưng có kiểm soát.
+
+## Block 4 — Ownership Boundary
+
+DevOps **không trực tiếp train model**, không tự chọn training data, không thay ML
+metric threshold và không tự phê duyệt chất lượng dự đoán. Các quyết định này cần
+ML Engineer và, khi cần, Product/Data owner chịu trách nhiệm.
+
+DevOps chịu trách nhiệm chính từ **Deploy -> Monitor -> Retrain Signal**:
+
+- Deploy model đã được phê duyệt bằng artifact version/digest xác định; thực hiện
+  shadow/canary, rollback và kiểm soát quyền triển khai.
+- Monitor reliability và vận hành: availability, latency, errors, saturation,
+  resource/cost, audit logs, data-pipeline health và delivery của alert.
+- Retrain Signal: chuyển evidence về drift, chất lượng, SLO hay dữ liệu tới owner
+  phù hợp; vận hành workflow retrain có guardrail nhưng không tự promotion model.
+
+Ranh giới này giúp tránh hai lỗi phổ biến: hạ tầng tự động thay đổi model mà không
+có quyết định khoa học dữ liệu, hoặc model được đánh giá tốt trong lab nhưng thiếu
+reliability, security và khả năng rollback khi vào production.
+
+## Block 4 — Tình huống quyết định release và self-check
+
+Ví dụ: một candidate model tăng điểm tổng trên evaluation set nhưng làm giảm chất
+lượng tiếng Việt, hoặc vượt inference-latency gate. Candidate đó **chưa được
+promote**. ML Engineer/Data owner đánh giá chất lượng, coverage data và nguyên
+nhân; Product owner xác nhận trade-off với người dùng; DevOps giữ version/digest,
+validation evidence, compatibility result và trạng thái gate trong audit trail.
+DevOps không tự nới ngưỡng, không tự chọn candidate và không tự chạy retrain hay
+promotion.
+
+Self-check:
+
+- **Data drift có chứng minh concept drift hay chất lượng đã giảm không?** Không.
+  Nó là tín hiệu phân phối input/feature thay đổi; cần evaluation với nhãn/feedback
+  hoặc phân tích ML để kết luận tác động chất lượng.
+- **Khi nào báo ML Engineer?** Khi data/schema/freshness check hoặc drift signal
+  vượt ngưỡng đã duyệt, prediction-quality feedback giảm, hay model version có
+  reliability/latency signal cần đánh giá trade-off. Báo kèm version, khoảng thời
+  gian, metric/evidence và compatibility context.
+- **Giới hạn ownership DevOps là gì?** DevOps vận hành deployment đã duyệt,
+  observability, rollback có kiểm soát và workflow signal. DevOps không tự quyết
+  training data, ML quality threshold, retrain, registry promotion hoặc release
+  model mới.
+>>>>>>> Stashed changes
